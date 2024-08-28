@@ -1,0 +1,26 @@
+BootStrap: docker
+From: osgeo/grass-gis:releasebranch_8_4-alpine
+
+%files
+    r.slopeunits
+    clean_method_3.sh
+    grassjob.sh
+
+%post
+    export SCRIPTS=/usr/local/grass/scripts
+    mv r.slopeunits $SCRIPTS
+    mv clean_method_3.sh $SCRIPTS
+
+    chmod ugo+rx $SCRIPTS/r.slopeunits
+    chmod ugo+rx $SCRIPTS/clean_method_3.sh 
+    chmod ugo+x grassjob.sh
+
+%runscript
+    # Create grass project from bathy file
+    rundir=$1
+    grass_project="$rundir/grassdata"
+    echo $grass_project
+    grass -e -c $rundir/bathy.tif $grass_project
+    
+    # Run GRASS_BATCH_JOB
+    grass $grass_project/PERMANENT --exec sh grassjob.sh $rundir
