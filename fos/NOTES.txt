@@ -1,0 +1,46 @@
+Ojomo Scripts:
+ 
+ky_calculation  INPUTS
+	- need to load python package rasterio to read and write input/output files
+	- geology.tif (grid of geology ID number)
+	- slope.tif (grid of slope angle degrees)
+	- strength_data.csv (c, phi, uncertainty, failure thickness, gwt and unit weight for each geology ID number) (cohesion and sigma_c not used, only ln values)
+	- weights.csv (statistical weights for three point approximation)
+	OUTPUTS
+	- ky7.npy (3D numpy array with 7 ky values for each lat, long position)
+	- ky7.tif (geotiff of ky7)
+ntasks = number of grid points
+geology IDs hard coded line 134
+minimum static FS = 1.1 (line 53)
+ 
+disp_calculation INPUTS
+	- need to load python package rasterio to read and write input/output files
+	- geology.tif (grid of geology ID number)
+	- slope.tif (grid of slope angle degrees)
+	- strength_data.csv (c, phi, uncertainty, failure thickness, gwt and unit weight for each geology ID number)
+	- weights.csv (statistical weights for three point approximation)
+	- ky7.tif (geotiff of ky7)
+	- pga.tif (grid of pga values) (g)
+	- pgv.tif (grid of pgv values) (cm/s)
+	OUTPUTS
+	- disp.tif (grid of 50th percentile of CDF of displacement values in cm) 
+	- binned_disp.tif (grid of 6 displacement values ?? )
+	- dispgt5.tif (grid of 1 = no landslide and 2 = landslide) (median displacement >= 5 cm)
+magnitude hard coded line 62
+geology IDs hard coded line 149
+5 cm landslide threshold hard coded line 167-68
+minimum displacement = 0.1 cm
+ 
+LZ_attributes  INPUTS
+	- need to load python package geopandas
+	- need to load python package rioxarray
+	- dispgt5.tif (grid of 1 = no landslide and 2 = landslide) (median displacement >= 5 cm)
+	- binned_disp.tif (grid of 6 displacement values ?? )
+	- su.shp and su.shx (slope unit shape file)
+	- aspect.tif (grid of slope direction) (azimuth clockwise from north in degrees)
+	OUTPUTS
+	- lz_grids.csv (list of landslide ID and lat long of all points in grid in landslide (intersection of slope unit and disp > 5))
+	- lz.csv (probability mass function for pipeline exposure length, movement direction, and displacement)
+area_bins (line 56) (area bins for pipeline risk evaluation)
+len_bins (line 57) (length bins for pipeline risk evaluation)
+deletes areas < 100m2 (line105)

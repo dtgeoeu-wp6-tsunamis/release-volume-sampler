@@ -1,7 +1,7 @@
 # Makefile for Singularity container management
 
 # Variables
-IMAGE_DIR = /home/ebr/projects/release-volume-sampler/images
+IMAGE_DIR ?= /home/ebr/projects/release-volume-sampler/images
 IMAGE_NAME = grass.sif
 DEF_FILE = grass.def
 IMAGE_PATH = $(IMAGE_DIR)/$(IMAGE_NAME)
@@ -23,16 +23,19 @@ shell:
 # Run container
 run:
 	@echo "Running the Singularity container..."
-	singularity run $(IMAGE_PATH) $(RUNDIR)
+	poetry run python main.py
+	#singularity run $(IMAGE_PATH) $(RUNDIR)
 
 # Clean up the built image
-clean:
+delete_image:
 	@echo "Delete singularity image $(IMAGE_PATH)..."
 	rm -f $(IMAGE_PATH)
-	
+ 
+clean:
 	@echo " Delete grassdata and slumap.tif from $(RUNDIR)..."
 	rm -r $(RUNDIR)/grassdata
 	rm $(RUNDIR)/slumap.tif
+	rm $(RUNDIR)/slumap_clean.tif
 
 # Help target
 help:
@@ -42,7 +45,7 @@ help:
 	@echo "  make build   - Build the Singularity container"
 	@echo "  make run     - Run the container for the given rundir."
 	@echo "  make shell   - Run a shell inside the Singularity container"
-	@echo "  make clean   - Remove the built Singularity image"
+	@echo "  make clean   - Remove the generated output of the run"
 	@echo "  make help    - Display this help message"
 
 .PHONY: all build shell clean help
