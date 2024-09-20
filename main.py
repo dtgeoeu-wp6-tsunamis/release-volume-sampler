@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 import rasterio
 import shutil
-from fos import displacements
+from slope_analysis import slope_analysis
 
 import numpy as np
 from sklearn.cluster import KMeans
@@ -20,16 +20,16 @@ logger.addHandler(logging.StreamHandler())
 def main():
     """
     Outline:
-        Python script
         - Create scenario folder
         - Copy bathymetry into scenario folder (bathy.tif)
         
-        Prepare features in container (gdal, grass, whiteboxtools?):
         - Calculate slope/aspect (This may be done using either grass or whitebox tools)
         - Calculate slopeunits using r.slopeunits https://doi.org/10.5194/gmd-9-3975-2016
         
-        
-        - Calculate displacements
+        - Calculate yield accelerations.
+        - Calculate displacements from yield acellerations and PGA.
+        - Get volumes by thresshold.
+        - Intersect with slopeunits.
         
     """
     # Settings
@@ -57,23 +57,27 @@ def main():
         except OSError as e:
             sys.exit(f"Can't create {rundir}: {e}")
     
+    preprocess = True
+    calculate_slopes_and_slope_units = True
+    run_slope_analysis = True
+    
     # Computations
-    if preprocess_bathy:
+    if preprocess:
         bathy = preprocess_bathy(bathyfile, singularity_image, map_projection_epsg, output_dir=rundir, logfile=logfile)
-        grass_project = create_grass_project(bathy, singularity_image, rundir, logfile=logfile)
-        run_grassjob(grass_project, bathy, singularity_image, project_dir, rundir, logfile=logfile)
-        calculate_fos(rundir)
+    if calculate_slopes_and_slope_units:    
+        run_grassjob(bathy, singularity_image, project_dir, rundir, logfile=logfile)
+    if run_slope_analysis:
+        slope_analysis(rundir)
 
 
 def preprocess_bathy(bathymetry, singularity_image, map_projection_epsg, output_dir, logfile, working_dir=None):
     """
     Copying bathy to generated folder.
-    TODO: Include preprocessing steps (When gdal is available).
-    # To truncate positive values
-    gdal_calc.py -A bathy/localMessinaBathy.tif --outfile=truncated.tif --calc="A*(A<0)" --NoDataValue=0
+    Truncate positive values.
+    $ gdal_calc.py -A bathy/localMessinaBathy.tif --outfile=truncated.tif --calc="A*(A<0)" --NoDataValue=0
     
-    # Transform to suitable coordinates.
-    gdalwarp -t_srs EPSG:6709 /home/ebr/projects/release-volume-sampler/bathy/messina_001/bathy_truncated.tif bathy.tif 
+    # Transform to map_projection_epsg coordinates.
+    $ gdalwarp -t_srs EPSG:6709 /home/ebr/projects/release-volume-sampler/bathy/messina_001/bathy_truncated.tif bathy.tif 
     """
     infile = bathymetry
     outfile = "bathy"
@@ -119,10 +123,14 @@ def preprocess_bathy(bathymetry, singularity_image, map_projection_epsg, output_
     log_process(completed_proc, logfile)
     return(f"{outfile}.tif")
 
-def create_grass_project(bathy, singularity_image, rundir, logfile):
+
+def run_grassjob(bathy, singularity_image, project_dir, rundir, logfile):
     """
     Create grass project from bathy in rundir.
+    run grassjob.sh: calculates slopes and slopeunits.
+    
     grass -e -c $rundir/bathy.tif [rundir]/grassdata
+    grass $grass_project/PERMANENT --exec sh grassjob.sh $rundir
     """
     grass_project = os.path.join(rundir, "grassdata")
     logger.info(f"Creating Grass GIS project from {bathy} in {rundir}.")
@@ -140,13 +148,7 @@ def create_grass_project(bathy, singularity_image, rundir, logfile):
     )
     completed_proc.check_returncode()  # raise CalledProcessError if return code is non-zero.
     log_process(completed_proc, logfile)
-    return(grass_project)
-
-def run_grassjob(grass_project, bathy, singularity_image, project_dir, rundir, logfile):
-    """
-    run grassjob.sh
-    grass $grass_project/PERMANENT --exec sh grassjob.sh $rundir
-    """
+    
     logger.info(f"Copy grassjob.sh to {rundir}.")
     shutil.copy(os.path.join(project_dir, "slopeunits", "grassjob.sh"), rundir)
     
@@ -167,8 +169,25 @@ def run_grassjob(grass_project, bathy, singularity_image, project_dir, rundir, l
     log_process(completed_proc, logfile)
 
 
-def calculate_fos(rundir):
-    displacements.calculate_factor_of_safety(rundir)
+def execute_slope_analysis(rundir):
+    quantiles = [0.1, 0.2, 0.5]
+    
+    # Parameters defined as discrete distributions or constants.
+    # May supply functional relations. Order according to dependencies.
+    physical_parameters = {
+        "distributions": {
+            "friction_angle": [(24.3, 1)], # [(value, weight),...]
+            "cohesion": [(20, 1)],
+            "thickness": [(3.6, 0.248), (4, 0.504),(4.4, 0.248)],
+            "density": [(1800, 0.5),(2000, 0.5)],
+        },
+        "constants": {
+            "density_of_water": 1020,
+            "gravity": 9.81,
+            "excess_pore_pressure": 0.
+        }
+    }
+    slope_analysis.run_analysis(rundir, quantiles, physical_parameters, slopefile="slope.tif", write_fos=True, write_ky=True)
 
 
 def slope(bathy, output_dir, logfile):

@@ -10,6 +10,6 @@ r.out.gdal input=slope output=slope.tif
 r.out.gdal input=aspect output=aspect.tif
 
 # Run slopeunits
-#r.slopeunits demmap=bathy slumap=slumap thresh=5000000 areamin=100000 cvmin=0.35 rf=10 maxiteration=10 cleansize=20000 slumapclean=slumap_clean
-#r.out.gdal input=slumap output=slumap.tif
-#r.out.gdal input=slumap_clean output=slumap_clean.tif
+r.slopeunits demmap=bathy slumap=slumap thresh=200000 areamin=200000 cvmin=0.3 rf=30 maxiteration=20 cleansize=5000 slumapclean=slumap_clean
+r.out.gdal input=slumap output=slumap.tif
+r.out.gdal input=slumap_clean output=slumap_clean.tif
