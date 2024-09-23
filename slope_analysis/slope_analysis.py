@@ -152,9 +152,9 @@ def run_analysis(working_dir, quantiles, physical_parameters, slopefile="slope.t
     # Evaluate quantiles by interpolation and write to file
     for i,quantile in enumerate(quantiles):
         fos_quantiles_raster = np.interp(slope_data, slopes, fos_quantiles[i,:])
-        write_tif(fname = os.path.join(working_dir,"fos", f"fos_{quantile}.tif"), data = fos_quantiles_raster, profile = slope_profile)
+        write_tif(fname = os.path.join(slope_analysis_dir, f"fos_{quantile}.tif"), data = fos_quantiles_raster, profile = slope_profile)
         ky_quantiles_raster = np.interp(slope_data, slopes, ky_quantiles[i,:])
-        write_tif(fname = os.path.join(working_dir,"fos", f"ky_{quantile}.tif"), data = ky_quantiles_raster, profile = slope_profile)
+        write_tif(fname = os.path.join(slope_analysis_dir, f"ky_{quantile}.tif"), data = ky_quantiles_raster, profile = slope_profile)
 
 
 def main():
@@ -167,10 +167,10 @@ def main():
     # May supply functional relations. Order according to dependencies.
     physical_parameters = {
         "distributions": {
-            "friction_angle": [(24.3, 1)], # [(value, weight),...]
-            "cohesion": [(20, 1)],
-            "thickness": [(3.6, 0.248), (4, 0.504),(4.4, 0.248)],
-            "density": [(1800, 0.5),(2000, 0.5)],
+            "friction_angle": [(26, 0.248), (27, 0.504), (28, 0.248)], # [(value, weight),...]
+            "cohesion": [(21, 0.248),(22,0.504),(23, 0.248)],
+            "thickness": [(3, 0.248), (4, 0.504),(5, 0.248)],
+            "density": [(1800, 0.248),(1900, 0.504),(2000, 0.248)],
         },
         "constants": {
             "density_of_water": 1020,

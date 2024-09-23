@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 import rasterio
 import shutil
-from slope_analysis import slope_analysis
+from slope_analysis import slope_analysis as sa
 
 import numpy as np
 from sklearn.cluster import KMeans
@@ -40,7 +40,7 @@ def main():
     
     generated = os.path.join(project_dir, "generated")
     scenario = "messina_001"
-    run = None #"messina_001_20240816_092455"
+    run = "messina_001_20240923_121008"
     
     if run is None:
         # Create time stamped rundir
@@ -57,17 +57,17 @@ def main():
         except OSError as e:
             sys.exit(f"Can't create {rundir}: {e}")
     
-    preprocess = True
+    preprocess = False
     calculate_slopes_and_slope_units = True
-    run_slope_analysis = True
+    run_slope_analysis = False
     
     # Computations
     if preprocess:
         bathy = preprocess_bathy(bathyfile, singularity_image, map_projection_epsg, output_dir=rundir, logfile=logfile)
     if calculate_slopes_and_slope_units:    
-        run_grassjob(bathy, singularity_image, project_dir, rundir, logfile=logfile)
+        run_grassjob(singularity_image, project_dir, rundir, logfile=logfile)
     if run_slope_analysis:
-        slope_analysis(rundir)
+        execute_slope_analysis(rundir)
 
 
 def preprocess_bathy(bathymetry, singularity_image, map_projection_epsg, output_dir, logfile, working_dir=None):
@@ -124,7 +124,7 @@ def preprocess_bathy(bathymetry, singularity_image, map_projection_epsg, output_
     return(f"{outfile}.tif")
 
 
-def run_grassjob(bathy, singularity_image, project_dir, rundir, logfile):
+def run_grassjob(singularity_image, project_dir, rundir, logfile):
     """
     Create grass project from bathy in rundir.
     run grassjob.sh: calculates slopes and slopeunits.
@@ -133,21 +133,24 @@ def run_grassjob(bathy, singularity_image, project_dir, rundir, logfile):
     grass $grass_project/PERMANENT --exec sh grassjob.sh $rundir
     """
     grass_project = os.path.join(rundir, "grassdata")
-    logger.info(f"Creating Grass GIS project from {bathy} in {rundir}.")
-    completed_proc = subprocess.run(
-        ["singularity",
-        "exec",
-        singularity_image,
-        "grass",
-        "-e",
-        "-c",
-        bathy,
-        grass_project],
-        cwd=rundir,
-        stdout=subprocess.PIPE
-    )
-    completed_proc.check_returncode()  # raise CalledProcessError if return code is non-zero.
-    log_process(completed_proc, logfile)
+    bathy = os.path.join(rundir, "bathy_projected_truncated.tif")
+    if not os.path.exists(grass_project):
+        logger.info(f"Creating Grass GIS project from {bathy} in {rundir}.")
+        completed_proc = subprocess.run(
+            ["singularity",
+            "exec",
+            singularity_image,
+            "grass",
+            "-e",
+            "-c",
+            bathy,
+            grass_project],
+            cwd=rundir,
+            stdout=subprocess.PIPE
+        )
+        completed_proc.check_returncode()  # raise CalledProcessError if return code is non-zero.
+        log_process(completed_proc, logfile)
+    
     
     logger.info(f"Copy grassjob.sh to {rundir}.")
     shutil.copy(os.path.join(project_dir, "slopeunits", "grassjob.sh"), rundir)
@@ -187,7 +190,7 @@ def execute_slope_analysis(rundir):
             "excess_pore_pressure": 0.
         }
     }
-    slope_analysis.run_analysis(rundir, quantiles, physical_parameters, slopefile="slope.tif", write_fos=True, write_ky=True)
+    sa.run_analysis(rundir, quantiles, physical_parameters, slopefile="slope.tif", write_fos=True, write_ky=True)
 
 
 def slope(bathy, output_dir, logfile):
