@@ -3,6 +3,7 @@ import numpy as np
 import os
 import sys
 import logging
+import json
 
 """ Cacluation of Factor of Safety and yield acceleration.
 
@@ -149,19 +150,30 @@ def run_analysis(working_dir, quantiles, physical_parameters, slopefile="slope.t
     ky_quantiles = np.quantile(np.stack(kys), quantiles, axis=0, weights=np.array(weights), method='inverted_cdf')
     logger.info(f"Sum of weights: {sum_of_weights}")
     
-    # Evaluate quantiles by interpolation and write to file
+    # Evaluate quantiles by interpolation and write to files.
+    output = []
     for i,quantile in enumerate(quantiles):
-        fos_quantiles_raster = np.interp(slope_data, slopes, fos_quantiles[i,:])
-        write_tif(fname = os.path.join(slope_analysis_dir, f"fos_{quantile}.tif"), data = fos_quantiles_raster, profile = slope_profile)
-        ky_quantiles_raster = np.interp(slope_data, slopes, ky_quantiles[i,:])
-        write_tif(fname = os.path.join(slope_analysis_dir, f"ky_{quantile}.tif"), data = ky_quantiles_raster, profile = slope_profile)
+        ky_filename, fos_filename = f"ky_{i}.tif", f"fos_{i}.tif"
+        
+        if write_fos:
+            fos_quantiles_raster = np.interp(slope_data, slopes, fos_quantiles[i,:])
+            write_tif(fname = os.path.join(slope_analysis_dir, fos_filename), data = fos_quantiles_raster, profile = slope_profile)
+            output.append({"file": fos_filename, "quantile": quantile, "value": "factor_of_safety"})
+       
+        if write_ky: 
+            ky_quantiles_raster = np.interp(slope_data, slopes, ky_quantiles[i,:])
+            write_tif(fname = os.path.join(slope_analysis_dir, ky_filename), data = ky_quantiles_raster, profile = slope_profile)
+            output.append({"file": ky_filename, "quantile": quantile, "value": "yield_acceleration"})
+    
+    with open(os.path.join(slope_analysis_dir, 'content.json'), 'w') as f:
+        json.dump(output, f, indent=4)
 
 
 def main():
     # Example...
     
-    working_dir = "/home/ebr/projects/release-volume-sampler/generated/messina_001_20240909_130842"
-    quantiles = [0.1, 0.2, 0.5]
+    working_dir = "/home/ebr/projects/release-volume-sampler/generated/messina_001_20240923_121008"
+    quantiles = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.99]
     
     # Parameters defined as discrete distributions or constants.
     # May supply functional relations. Order according to dependencies.

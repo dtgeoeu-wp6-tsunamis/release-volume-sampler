@@ -1,22 +1,26 @@
 import rasterio
-from rasterio.plot import show
 import matplotlib.pyplot as plt
 import os
 import numpy as np
+import json
 
 """
-Script to plot generated quantiles of the yield acelleration.
-
-Description of plot:
-Different quantiles for the slope aligned yield-aceleration as calculated using inifinite slope analaysis for the Messina strait. 
-The uncertainty stems from uncertainty of the friction angle, cohesion, density and the thickness of the sliding surface.
+Script to plot generated quantiles of the displacements.
 """
-
 
 # Filepaths for your rasters
-working_dir = "/home/ebr/projects/release-volume-sampler/generated/messina_001_20240909_130842/slope_analysis"
-raster_paths = [os.path.join(working_dir, file) for file in ['ky_1.tif', 'ky_2.tif', 'ky_3.tif']]
-titles = ["0.1-quantile of $k_y$", "0.2-quantile of $k_y$", "0.5-quantile of k_y"]
+working_dir = "/home/ebr/projects/release-volume-sampler/generated/messina_001_20240923_121008/release_volumes"
+
+# load json file
+with open(os.path.join(working_dir, "content.json"),'r') as f:
+    content = json.load(f)
+
+# Select quantiles to plot.
+content = [e for e in content if e["quantile"] in [0.99, 0.9, 0.8]]
+
+
+raster_paths = [os.path.join(working_dir, e["file"]) for e in content]
+titles = ["{}-quantile of {}".format(e["quantile"], e["value"]) for e in content]
 
 # Initialize lists to store raster data and no-data values
 rasters = []
@@ -43,6 +47,7 @@ for i, raster_data in enumerate(rasters):
     
     # Plot the raster with a shared color scale (global_min, global_max)
     img = axes[i].imshow(raster_data, cmap='tab20b_r', vmin=global_min, vmax=global_max)
+    cnts = axes[i].contour(raster_data, colors='k', levels=[np.log(5.)], origin='lower')
     #img = axes[i].imshow(raster_data, cmap='tab20b')
     
     # Add title
@@ -50,8 +55,8 @@ for i, raster_data in enumerate(rasters):
 
 # Add a single colorbar for the entire figure
 cbar = fig.colorbar(img, ax=axes, orientation='vertical', fraction=0.08, pad=0.01)
-cbar.set_label('Yield Acceleration')
+cbar.set_label('Displacements')
 
 # Adjust layout and show the plot
 #plt.tight_layout()
-plt.savefig(os.path.join(working_dir, "ky_plot.png"))
+plt.savefig(os.path.join(working_dir, "displacements.png"))

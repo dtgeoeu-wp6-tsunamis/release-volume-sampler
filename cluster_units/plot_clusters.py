@@ -6,7 +6,9 @@ import math
 
 # Filepaths for your rasters
 working_dir = "/home/ebr/projects/release-volume-sampler/generated/messina_001_20240923_121008/cluster_analysis"
-number_of_patches = [2000, 1000, 500, 200]
+#number_of_patches = [2000, 1000, 500, 200]
+
+number_of_patches = [3000, 1, 2, 3]
 raster_paths = [os.path.join(working_dir,f'patches_{n_patches}.tif') for n_patches in number_of_patches]
 
 # Create a figure with subplots, one for each raster
@@ -34,4 +36,4 @@ for i, raster_path in enumerate(raster_paths):
 
 # Adjust layout and show the plot
 plt.tight_layout()
-plt.savefig(os.path.join(working_dir,"grid.png"))
+plt.savefig(os.path.join(working_dir,"grid.svg"))
