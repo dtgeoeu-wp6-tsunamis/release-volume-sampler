@@ -3,3 +3,4 @@ poetry.lock
 generated/
 bathy/
 images/
+shakemaps/
