@@ -41,4 +41,4 @@ help:
 	@echo "  make clean   - Remove the generated output of the run"
 	@echo "  make help    - Display this help message"
 
-.PHONY: all build shell clean help
+.PHONY: build shell clean help

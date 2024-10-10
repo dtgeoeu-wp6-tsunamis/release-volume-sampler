@@ -1,6 +1,5 @@
 poetry.lock
 
 generated/
-bathy/
+input/
 images/
-shakemaps/

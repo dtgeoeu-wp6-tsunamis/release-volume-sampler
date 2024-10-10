@@ -2,36 +2,21 @@
 import rasterio
 import numpy as np
 import os
-import sys
 import logging
 import json
-from pyproj import CRS, Transformer
 from scipy.interpolate import RegularGridInterpolator
 import matplotlib.pyplot as plt
 
+from utils.utils import create_dir, read_tif, write_tif
+
 """ Cacluation of displacements from yield acceleration and shakemaps.
 
-excecution: poetry run python displacements/displacements.py or call from main.py
+excecution: poetry run python displacements/displacements.py or call calculate_displacements from main.py.
 """
 
 logging.basicConfig(level = logging.INFO)
 logger = logging.getLogger('slope_analysis')
-
-
-def read_tif(fname):
-    "Read .tif data and profile using rasterio."
-    logger.info(f"Read file: {fname}")
-    with rasterio.open(fname) as src:
-        data = src.read(1)
-        profile = src.profile.copy()
-    return data, profile
-
-
-def write_tif(fname, data, profile):
-    "Write .tif data and profile using rasterio."
-    logger.info(f"Write file: {fname}")
-    with rasterio.open(fname, 'w', **profile) as dst:
-        dst.write(data, 1)
+figure_dir = None
 
 
 def displacement(ky, pga, M=None, pgv=None, model="scalar"):
@@ -70,17 +55,7 @@ def displacement(ky, pga, M=None, pgv=None, model="scalar"):
     return(ln_d, sigma_ln)
 
 
-def create_dir(dir_name):
-    if not os.path.exists(dir_name):
-        try:
-            os.makedirs(dir_name)
-            logger.info(f"Created directory {dir_name}")
-        except OSError as e:
-            sys.exit(f"Can't create {dir_name}: {e}")
-    
-
-
-def calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, write_displacements=False):
+def calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, write_displacements=False, make_plots=False):
     #pga=0.7
     magnitude = 7.
     shake_value = 'Z_pga'
@@ -98,7 +73,10 @@ def calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, w
     if write_shakemaps:
         shakemaps_dir = os.path.join(rundir, "shakemaps")
         create_dir(shakemaps_dir)
-
+    if make_plots:
+        figure_dir = os.path.join(rundir, "figures")
+        create_dir(figure_dir)
+    
     # Load yield acceleration maps.
     slope_analysis_output_folder = os.path.join(rundir, "slope_analysis")
 
@@ -131,6 +109,9 @@ def calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, w
                 # Calculate displacement quantiles 
                 # Here we apply the fact that displacements are decreasing with ky.
                 ln_d, ln_sigma = displacement(ky=ky, pga=pga, M=magnitude)
+                if make_plots:
+                    plot_raster(ln_d, "displacement_{}_{}.png".format(shake_sample, i))
+                
                 if write_displacements:
                     filename = f"d_{i}_{shake_sample}.tif"
                     output.append({
@@ -152,13 +133,15 @@ def calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, w
 
 
 def plot_raster(data, filename):
+    """
+        Applied to debug shakemap interpolation.
+    """
     fig, ax = plt.subplots()
     im = ax.imshow(data, interpolation='bilinear', origin='upper')
-    figure_folder="/home/ebr/projects/release-volume-sampler/generated/messina_001_20241008_115914/figures"
-    plt.savefig(os.path.join(figure_folder, filename))
+    plt.savefig(os.path.join(figure_dir, filename))
 
 
-def interpolate_shakemap(shakemaps, shake_value, shake_sample, interpolation_method, bbox, n_rows, n_cols):
+def interpolate_shakemap(shakemaps, shake_value, shake_sample, interpolation_method, bbox, n_rows, n_cols, make_plots=False):
     # Create grid interpolator
     lon_shake, lat_shake, data = zip(*[(point['lon'], point['lat'], point[shake_value][shake_sample]) for _, point in shakemaps.items()])
     grid_shake = np.array(list(set(lon_shake))), np.array(list(set(lat_shake))) # Extract unique values 
@@ -166,7 +149,8 @@ def interpolate_shakemap(shakemaps, shake_value, shake_sample, interpolation_met
     grid_shake_shape = grid_shake[0].shape[0], grid_shake[1].shape[0]
     data = np.reshape(data, grid_shake_shape, order='C') # Reshape data. 
     # Lon fixed, Lat change -> C order. Location of data(ij): lowerleft + (j*delta_lat, i*delta_lon) 
-    plot_raster(np.flip(data.T,-1), "shakemap.png")
+    if make_plots:
+        plot_raster(np.flip(data.T,-1), os.path.join(figure_dir, "shakemap.png"))
     shake_interp = RegularGridInterpolator(points=grid_shake, values=np.flip(data.T,-1), method=interpolation_method) # Data need to be ij matrix format (See np.meshgrid)
     
     # verify that interpolation is exact at grid values.RSS nonzero with flipped axes...
@@ -176,16 +160,16 @@ def interpolate_shakemap(shakemaps, shake_value, shake_sample, interpolation_met
     # Interpolate grid.
     grid_int = np.meshgrid(np.linspace(bbox.left, bbox.right, num=n_cols), np.linspace(bbox.bottom, bbox.top, num=n_rows), indexing='ij')
     shake_values = shake_interp(grid_int)
-    plot_raster(shake_values, "shake_values.png")
+    if make_plots:
+        plot_raster(shake_values, os.path.join(figure_dir, "shake_values.png"))
     return(np.flip(shake_values,-1).T)
 
 
 def main():
-    rundir = "/home/ebr/projects/release-volume-sampler/generated/messina_001_20241008_115914"
-    shakemaps_filename = "/home/ebr/projects/release-volume-sampler/shakemaps/messina_1908/predicted_data_NN_Messina_1908.json"
+    rundir = "/home/ebr/projects/release-volume-sampler/generated/messina_001_20241010_134621"
+    shakemaps_filename = "/home/ebr/projects/release-volume-sampler/input/shakemaps/messina_1908/predicted_data_NN_Messina_1908.json"
     
-    
-    calculate_displacements(rundir, shakemaps_filename)
+    calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, write_displacements=True, make_plots=True)
 
 if __name__ == "__main__":
     main()

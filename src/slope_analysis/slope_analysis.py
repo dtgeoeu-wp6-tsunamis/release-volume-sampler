@@ -5,6 +5,8 @@ import sys
 import logging
 import json
 
+from utils.utils import read_tif, write_tif
+
 """ Cacluation of Factor of Safety and yield acceleration.
 
 excecution: poetry run python slope_analysis/slope_analysis.py or call from main.py
@@ -12,22 +14,6 @@ excecution: poetry run python slope_analysis/slope_analysis.py or call from main
 
 logging.basicConfig(level = logging.INFO)
 logger = logging.getLogger('slope_analysis')
-
-
-def read_tif(fname):
-    "Read .tif data and profile using rasterio."
-    logger.info(f"Read file: {fname}")
-    with rasterio.open(fname) as src:
-        data = src.read(1)
-        profile = src.profile.copy()
-    return data, profile
-
-
-def write_tif(fname, data, profile):
-    "Write .tif data and profile using rasterio."
-    logger.info(f"Write file: {fname}")
-    with rasterio.open(fname, 'w', **profile) as dst:
-        dst.write(data, 1)
 
 
 def infinite_slope_analysis(slope, friction_angle, cohesion, thickness, density, density_of_water = 1000, gravity = 9.81, excess_pore_pressure = 0., yield_angle = None):
