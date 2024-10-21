@@ -1,20 +1,27 @@
 import rasterio
+from rasterio.plot import show
 import matplotlib.pyplot as plt
 import os
 import numpy as np
 import json
 import argparse
+import logging
+
+
+logging.basicConfig(level = logging.INFO)
+logger = logging.getLogger('plot')
 
 """
-Script to plot generated quantiles of the displacements.
+Script to plot generated quantiles of the yield acelleration or fos.
 
-$ python src/displacements/plot_displacements.py generated/messina_001_20241010_134621 0 0.5 0.8 0.9
+Description of plot:
+Different quantiles for the slope aligned yield-aceleration as calculated using inifinite slope analaysis for the Messina strait. 
+The uncertainty stems from uncertainty of the friction angle, cohesion, density and the thickness of the sliding surface.
 """
-import argparse
-import os
+
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Plot displacements.")
+    parser = argparse.ArgumentParser(description="Plot yield accellerations.")
 
     # Add arguments
     parser.add_argument(
@@ -23,15 +30,23 @@ def parse_args():
         help="Path to the rundir (must be a valid directory)."
     )
     parser.add_argument(
-        'shakemap', 
-        type=int, 
-        help="Integer representing the selected shakemap."
-    )
-    parser.add_argument(
         'quantiles', 
         type=float, 
         nargs='+',  # Accept one or more quantiles
         help="List of quantiles (must be floats)."
+    )
+    parser.add_argument(
+        '--value',
+        type=str,
+        help="Type of output to plot.",
+        default="yield_acceleration"
+    )
+    parser.add_argument(
+        '--logscale',
+        action=argparse.BooleanOptionalAction, 
+        type=bool,
+        help="Plot values in logscale.",
+        default=False
     )
 
     # Parse the arguments
@@ -49,18 +64,18 @@ def parse_args():
     return args
 
 
-def plot(rundir, shakemap=0, quantiles=[0.9, 0.8, 0.5]):
+def plot(rundir, value, quantiles, logscale):    
+    working_dir = os.path.join(rundir, "slope_analysis")
     
-    working_dir = os.path.join(rundir, "displacements")
     # load json file
     with open(os.path.join(working_dir, "content.json"),'r') as f:
         content = json.load(f)
 
-    # Select quantiles and shakemap_sample to plot.
-    content = [e for e in content if e["quantile"] in quantiles and e["shakemap_sample"] in [0]]
-
-    raster_paths = [os.path.join(working_dir, e["file"]) for e in content]
+    # Select quantiles and value to plot.
+    content = [e for e in content if e["quantile"] in quantiles and e["value"] == value]
     titles = ["{}-quantile of {}".format(e["quantile"], e["value"]) for e in content]
+    
+    logger.info(f"plot titles: {titles}")
 
     # Initialize lists to store raster data and no-data values
     rasters = []
@@ -71,15 +86,17 @@ def plot(rundir, shakemap=0, quantiles=[0.9, 0.8, 0.5]):
         raster_path = os.path.join(working_dir, e["file"])
         with rasterio.open(raster_path) as src:
             raster_data = src.read(1)
+            if not logscale and e["scale"] == "log10":
+                raster_data = 10**raster_data
             nodata_vals.append(src.nodata)
             rasters.append(raster_data)
 
     # Get the global min and max across all rasters, ignoring no-data values
     global_min = min([np.nanmin(r) for r in rasters])
-    global_max = max([np.nanmax(r) for r in rasters])
+    global_max = min([np.nanmax(r) for r in rasters])
 
     # Create a figure with subplots, one for each raster
-    fig, axes = plt.subplots(1, len(raster_paths), figsize=(16, 6), layout='compressed')
+    fig, axes = plt.subplots(1, len(rasters), figsize=(16, 6), layout='compressed')
 
     # Loop through each raster and plot
     for i, raster_data in enumerate(rasters):
@@ -88,22 +105,20 @@ def plot(rundir, shakemap=0, quantiles=[0.9, 0.8, 0.5]):
         
         # Plot the raster with a shared color scale (global_min, global_max)
         img = axes[i].imshow(raster_data, cmap='tab20b_r', vmin=global_min, vmax=global_max)
-        cnts = axes[i].contour(raster_data, colors='k', levels=[np.log10(5.)], origin='lower')
-        #img = axes[i].imshow(raster_data, cmap='tab20b')
         
         # Add title
         axes[i].set_title(titles[i], loc="left")
 
     # Add a single colorbar for the entire figure
     cbar = fig.colorbar(img, ax=axes, orientation='vertical', fraction=0.08, pad=0.01)
-    cbar.set_label('Displacements')
+    cbar.set_label('Yield Acceleration')
 
     # Adjust layout and show the plot
-    #plt.tight_layout()
-    plt.savefig(os.path.join(working_dir, "displacements.png"))
-
-
+    plt.savefig(os.path.join(working_dir, f"{value}_plot.png"))
+    
+    
 if __name__ == "__main__":
     # Parse and retrieve the arguments
     args = parse_args()
-    plot(args.rundir, shakemap=args.shakemap, quantiles=args.quantiles)
+    logger.info(f"args: {args}")
+    plot(rundir=args.rundir, value=args.value, quantiles=args.quantiles, logscale=args.logscale)

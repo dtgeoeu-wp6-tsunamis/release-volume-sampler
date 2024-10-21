@@ -1,183 +1,221 @@
-import rasterio
 import numpy as np
 import os
-import sys
 import logging
 import json
 
-from utils.utils import read_tif, write_tif
+from utils.utils import read_tif, write_tif, create_dir, cummulative
 
-""" Cacluation of Factor of Safety and yield acceleration.
-
-excecution: poetry run python slope_analysis/slope_analysis.py or call from main.py
-"""
 
 logging.basicConfig(level = logging.INFO)
 logger = logging.getLogger('slope_analysis')
 
 
-def infinite_slope_analysis(slope, friction_angle, cohesion, thickness, density, density_of_water = 1000, gravity = 9.81, excess_pore_pressure = 0., yield_angle = None):
-    """
-    Returns Factor of Safety and Yield Acelleration associated with an infinite slope analysis.
-    Yield acceleration is expressed in multiples of gravity. Cyrrently drained/undrained conditions are not considered.
+class SlopeAnalysis:
     
-    Parameters: 
-    
-    slope: number or ndarray
-        Slope angle in degrees.
-    friction_angle:
-        friction angle in degrees.
-    cohesion: 
-        Cohesion [kPa]
-    thickness:
-        depth to slide surface measured slope normal [m].
-    density:
-        density of slide [kg/m3]
-    density_of_water:
-        density of water [kg/m3] (default is 1000 kg/m3)
-    gravity:
-        acceleration of gravitation [m/s2] (default is 9.81)
-    excess_pore_pressure:
-        Excess pore pressure [kPa] (default is 0)
-    yield_angle:
-        Direction of shaking given in degrees with horizontal axis. If None, shaking is assumed to be parallell with slope.
-    TODO: Verify correction factor for yield acelleration!
-    """
-    logger.info("Calculating Factor Of Safety.")
-    
-    gamma = (density - density_of_water)/density
-    c = cohesion*1000. #in Pa
-    u = excess_pore_pressure*1000. #in Pa
-    mu = np.tan(np.radians(friction_angle))
-    g = gravity
-    rho = density
-    H = thickness
-    alpha = np.radians(slope)
-    
-    fos = (c-u*mu)/(rho*H*gamma*g*np.sin(alpha)) + mu/np.tan(alpha)
-    ky = gamma*(np.sin(alpha)*(fos-1.))
-    
-    if yield_angle is not None:
-        psi = np.radians(yield_angle)
-        ky = ky/(np.cos(psi-alpha) - np.sin(psi-alpha)*mu) # Correction factor
-    return fos, ky
-
-
-def run_analysis(working_dir, quantiles, physical_parameters, slopefile="slope.tif", write_fos=True, write_ky=True):
-    """
-    Run infinite slope analysis with uncertain input parameters. Output is written to folder 
-    the subdirectory [working_dir]/slope_analysis.
-    
-    Parameters:
-    
-    working_dir: str
-        Path to working directory. 
-    quantiles: list
-        List of quantiles to output raster maps.
-    slopefile: str
-        name of raster with calculated slopes. Has to be located in working_directory. Defaults to slope.tif.
-    write_fos: bool
-        If True, calculates quantiles of Factor-of-Safety and writes to files. Defaults to True
-    write_ky: bool
-        If True, calculates quantiles of yield acceleration and writes to files. Defaults to True
-    physical_parameters: dict
-        Geotechnical parameters and sliding layer properties defined as discrete distributions or constants. 
-        keys: friction_angle, cohesion, thickness, density must be included either as distribution or constants. 
-        optional: density_of_water, gravity, excess_pore_pressure, yield_angle have default values (See function infinite_slope_analysis).
-        Todo: May supply functional relations. Order keys according to dependencies.
+    def __init__(self, working_dir, physical_parameters, slopefile="slope.tif"):
+        """
+        Run infinite slope analysis with uncertain input parameters. 
         
-        Example:
-            physical_parameters = {
-                "distributions": {
-                    "friction_angle": [(24.3, 1)], # [(value, weight),...]
-                    "cohesion": [(20, 1)],
-                    "thickness": [(3.6, 0.248), (4, 0.504),(4.4, 0.248)],
-                    "density": [(1800, 0.5),(2000, 0.5)],
-                },
-                "constants": {
-                    "density_of_water": 1020,
-                    "gravity": 9.81,            # Defaults to 9.81
-                    "excess_pore_pressure": 0.  # Defaults to 0.
-                    "yield_angle": 0. # Defaults to None in which case it is assumed to be parallel with slope.
+        Parameters:
+        
+        working_dir: str
+            Path to working directory. 
+        physical_parameters: dict
+            Geotechnical parameters and sliding layer properties defined as discrete distributions or constants. 
+            keys: friction_angle, cohesion, thickness, density must be included either as distribution or constants. 
+            optional: density_of_water, gravity, excess_pore_pressure, yield_angle have default values (See function infinite_slope_analysis).
+            Todo: May supply functional relations. Order keys according to dependencies.
+            
+            Example:
+                physical_parameters = {
+                    "distributions": {
+                        "friction_angle": [(24.3, 1)], # [(value, weight),...]
+                        "cohesion": [(20, 1)],
+                        "thickness": [(3.6, 0.248), (4, 0.504),(4.4, 0.248)],
+                        "density": [(1800, 0.5),(2000, 0.5)],
+                    },
+                    "constants": {
+                        "density_of_water": 1020,
+                        "gravity": 9.81,            # Defaults to 9.81
+                        "excess_pore_pressure": 0.  # Defaults to 0.
+                        "yield_angle": 0. # Defaults to None in which case it is assumed to be parallel with slope.
+                    }
                 }
-            }
-    """
+        slopefile: str
+            name of raster with calculated slopes. Has to be located in working_directory. Defaults to slope.tif.
+        """
+        self.working_dir = working_dir
+        self.physical_parameters = physical_parameters
+        self.slopefile = slopefile
+        
+        # Subdirectory names for output
+        self.fos_dir = os.path.join(working_dir, "fos")
+        self.yield_acceleration_dir = os.path.join(working_dir, "yield_acceleration")
+        
+        # Load slopedata
+        self.slope_data, self.slope_msk, self.slope_profile = read_tif(os.path.join(working_dir, slopefile))
+        
+        # Create event tree.
+        self.root_node = Node(weight=1, distributions=physical_parameters["distributions"], params=physical_parameters["constants"], parent=None)
+        
+        # Traverse leaf nodes and create linear interpolations for slope variation.
+        self.slopes = np.linspace(np.nanmin(self.slope_data), np.nanmax(self.slope_data), num=100)        
+        kys, weights, foss = [], [], []
+        sum_of_weights = 0.
+        
+        for count, node in enumerate(self.root_node.leaf_nodes):
+            logger.info(f"Leaf node:{count} \n Weight:{node.weight} \n Params:{node.params} \n")
+            fos, ky = self.infinite_slope_analysis(self.slopes, **node.params)
+            foss.append(fos)
+            kys.append(ky)
+            weights.append(node.weight)
+            sum_of_weights += node.weight
+        
+        logger.info(f"Sum of weights: {sum_of_weights}")
+        self.foss = np.stack(foss)
+        self.kys = np.stack(kys)
+        self.weights = np.array(weights)
     
-    # Create subdirectory for output
-    slope_analysis_dir = os.path.join(working_dir, "slope_analysis")
-    if not os.path.exists(slope_analysis_dir):
-        try:
-            os.makedirs(slope_analysis_dir)
-            logger.info(f"Created directory {slope_analysis_dir}")
-        except OSError as e:
-            sys.exit(f"Can't create {slope_analysis_dir}: {e}")
-
-    # Create event tree.
-    root_node = Node(weight=1, distributions=physical_parameters["distributions"], params=physical_parameters["constants"], parent=None)
     
-    # Traverse leaf nodes and create linear interpolations for slope variation.
-    slope_data, slope_profile = read_tif(os.path.join(working_dir, slopefile))
+    def compute_quantiles(self, quantiles, write_fos=False, write_ky=False):
+        """
+        Compute quantiles of the factor of safety and the yield acceleration.
+        Output is written to the subdirectory [working_dir]/slope_analysis.
+        
+        Parameters:
+        
+        quantiles: list
+            List of quantiles to output raster maps.
+        write_fos: bool
+            If True, calculates quantiles of Factor-of-Safety over the topography and writes each quantile to file. Defaults to False.
+        write_ky: bool
+            If True, calculates quantiles of yield acceleration over the topography and writes each quantile to file. Defaults to False.
+        
+        """
+        
+        fos_output, ky_output = [], []
+        
+        # Create Lookup tables
+        fos_quantiles = np.quantile(self.foss, quantiles, axis=0, weights=self.weights, method='inverted_cdf')
+        ky_quantiles = np.quantile(self.kys, quantiles, axis=0, weights=self.weights, method='inverted_cdf')
+        
+        if write_fos: create_dir(self.fos_dir)
+        if write_ky: create_dir(self.yield_acceleration_dir)
+        
+        # Evaluate quantiles by interpolation of lookuptables over topography and write to files.
+        for i, quantile in enumerate(quantiles):
+            ky_quantiles_filename, fos_quantiles_filename = f"ky_quantiles_{i}.tif", f"fos_quantiles_{i}.tif"
+            
+            if write_fos:
+                fos_quantiles_raster = np.interp(self.slope_data, self.slopes, fos_quantiles[i,:])
+                write_tif(fname = os.path.join(self.fos_dir, fos_quantiles_filename), data = fos_quantiles_raster, profile = self.slope_profile)
+                fos_output.append({"file": fos_quantiles_filename, "quantile": quantile, "value": "factor_of_safety", "scale": "log10", "unit":""})
+        
+            if write_ky: 
+                ky_quantiles_raster = np.interp(self.slope_data, self.slopes, ky_quantiles[i,:])
+                write_tif(fname = os.path.join(self.yield_acceleration_dir, ky_quantiles_filename), data = ky_quantiles_raster, profile = self.slope_profile)
+                ky_output.append({"file": ky_quantiles_filename, "quantile": quantile, "value": "yield_acceleration", "scale":"log10", "unit": "g"})
+        
+        if write_fos: self.write_content(fos_output, self.fos_dir)
+        if write_ky: self.write_content(ky_output, self.yield_acceleration_dir)
     
-    # Create slope range for interpolation
-    slopes = np.linspace(np.nanmin(slope_data), np.nanmax(slope_data), num=100)
-    kys, weights, foss = [], [], []
-    sum_of_weights = 0.
-
-    for count, node in enumerate(root_node.leaf_nodes):
-        logger.info(f"Leaf node:{count} \n Weight:{node.weight} \n Params:{node.params} \n")
-        fos, ky = infinite_slope_analysis(slopes, **node.params)
-        foss.append(fos)
-        kys.append(ky)
-        weights.append(node.weight)
-        sum_of_weights += node.weight
     
-    # Compute quantiles
-    fos_quantiles = np.quantile(np.stack(foss), quantiles, axis=0, weights=np.array(weights), method='inverted_cdf')
-    ky_quantiles = np.quantile(np.stack(kys), quantiles, axis=0, weights=np.array(weights), method='inverted_cdf')
-    logger.info(f"Sum of weights: {sum_of_weights}")
-    
-    # Evaluate quantiles by interpolation and write to files.
-    output = []
-    for i,quantile in enumerate(quantiles):
-        ky_filename, fos_filename = f"ky_{i}.tif", f"fos_{i}.tif"
+    def compute_cummulative_fos(self, thresholds, write_fos=False):
+        # Lookup table
+        fos_cummulative = cummulative(self.foss, thresholds, weights=self.weights, axis=0)
         
         if write_fos:
-            fos_quantiles_raster = np.interp(slope_data, slopes, fos_quantiles[i,:])
-            write_tif(fname = os.path.join(slope_analysis_dir, fos_filename), data = fos_quantiles_raster, profile = slope_profile)
-            output.append({"file": fos_filename, "quantile": quantile, "value": "factor_of_safety"})
-       
-        if write_ky: 
-            ky_quantiles_raster = np.interp(slope_data, slopes, ky_quantiles[i,:])
-            write_tif(fname = os.path.join(slope_analysis_dir, ky_filename), data = ky_quantiles_raster, profile = slope_profile)
-            output.append({"file": ky_filename, "quantile": quantile, "value": "yield_acceleration"})
+            output = []
+            create_dir(self.fos_dir)
+        
+            # Evaluate cummulative by interpolation and write to files.
+            for i, threshold in enumerate(thresholds):
+                fos_cummulative_filename = f"fos_cum_{i}.tif"
+                fos_cummulative_raster = np.interp(self.slope_data, self.slopes, fos_cummulative[i,:])
+                write_tif(fname = os.path.join(self.fos_dir, fos_cummulative_filename), data = fos_cummulative_raster, profile = self.slope_profile)
+                output.append({"file": fos_cummulative_filename, "threshold":threshold, "value": "probability", "scale": "", "unit": ""})
+            
+            self.write_content(output, self.fos_dir)
+        return(fos_cummulative)
     
-    with open(os.path.join(slope_analysis_dir, 'content.json'), 'w') as f:
-        json.dump(output, f, indent=4)
-
-
-def main():
-    # Example...
     
-    working_dir = "/home/ebr/projects/release-volume-sampler/generated/messina_001_20240923_121008"
-    quantiles = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.99]
+    def compute_cummulative_ky(self, thresholds, write_ky=True):
+        # Lookup table
+        ky_cummulative = cummulative(self.foss, thresholds, weights=self.weights, axis=0)
+        
+        if write_ky:
+            ky_output = []
+            create_dir(self.yield_acceleration_dir)
+            
+            # Evaluate cummulative by interpolation and write to files.
+            for i, threshold in enumerate(thresholds):
+                ky_cummulative_filename = f"ky_cum_{i}.tif"
+                ky_cummulative_raster = np.interp(self.slope_data, self.slopes, ky_cummulative[i,:])
+                write_tif(fname = os.path.join(self.yield_acceleration_dir, ky_cummulative_filename), data = ky_cummulative_raster, profile = self.slope_profile)
+                ky_output.append({"file": ky_cummulative_filename, "threshold":threshold, "value": "probability", "scale": "", "unit": "g"})
+            
+            self.write_content(ky_output, self.yield_acceleration_dir)
+        return(ky_cummulative)
+        
     
-    # Parameters defined as discrete distributions or constants.
-    # May supply functional relations. Order according to dependencies.
-    physical_parameters = {
-        "distributions": {
-            "friction_angle": [(26, 0.248), (27, 0.504), (28, 0.248)], # [(value, weight),...]
-            "cohesion": [(21, 0.248),(22,0.504),(23, 0.248)],
-            "thickness": [(3, 0.248), (4, 0.504),(5, 0.248)],
-            "density": [(1800, 0.248),(1900, 0.504),(2000, 0.248)],
-        },
-        "constants": {
-            "density_of_water": 1020,
-            "gravity": 9.81,
-            "excess_pore_pressure": 0.
-        }
-    }
-
-    run_analysis(working_dir, quantiles, physical_parameters, slopefile="slope.tif", write_fos=True, write_ky=True)
+    def write_content(self, content, output_dir):
+        with open(os.path.join(output_dir, 'content.json'), 'w') as f:
+            json.dump(content, f, indent=4)
+        
+    
+    @staticmethod
+    def infinite_slope_analysis(slope, friction_angle, cohesion, thickness, density, density_of_water = 1000, gravity = 9.81, excess_pore_pressure = 0., yield_angle = None, eps=0.001):
+        """
+        Returns Factor of Safety and Yield Acelleration associated with an infinite slope analysis.
+        Yield acceleration is expressed in log10 scale of multiples of gravity. Cyrrently drained/undrained conditions are not considered.
+        
+        Parameters: 
+        
+        slope: number or ndarray
+            Slope angle in degrees.
+        friction_angle:
+            friction angle in degrees.
+        cohesion: 
+            Cohesion [kPa]
+        thickness:
+            depth to slide surface measured slope normal [m].
+        density:
+            density of slide [kg/m3]
+        density_of_water:
+            density of water [kg/m3] (default is 1000 kg/m3)
+        gravity:
+            acceleration of gravitation [m/s2] (default is 9.81)
+        excess_pore_pressure:
+            Excess pore pressure [kPa] (default is 0)
+        yield_angle:
+            Direction of shaking given in degrees with horizontal axis. If None, shaking is assumed to be parallell with slope.
+        eps: float (default is 0.001)
+            Truncation thresshold. Set fos and ky to NAN when sin of slope is less than eps. 
+        TODO: Verify correction factor for yield acelleration!
+        
+        Returns:
+        fos, ky: (ndarray, ndarray)
+            Base 10 logarithm of the factor of safety and the yield acelleration.
+        """
+        logger.info("Calculating Factor Of Safety.")
+        
+        gamma = (density - density_of_water)/density
+        c = cohesion*1000. #in Pa
+        u = excess_pore_pressure*1000. #in Pa
+        mu = np.tan(np.radians(friction_angle))
+        g = gravity
+        rho = density
+        H = thickness
+        alpha = np.radians(slope)
+        eps = 0.001 # truncation threshold.
+        
+        fos = np.where(np.sin(alpha) > eps, (c-u*mu)/(rho*H*gamma*g*np.sin(alpha)) + mu/np.tan(alpha), np.nan)
+        ky = np.where(np.sin(alpha) > eps, gamma*np.sin(alpha)*(fos-1.), np.nan)
+        
+        if yield_angle is not None:
+            psi = np.radians(yield_angle)
+            ky = ky/(np.cos(psi-alpha) - np.sin(psi-alpha)*mu) # Correction factor
+        return np.log10(fos), np.log10(ky)
 
 
 class Node():
@@ -212,7 +250,3 @@ class Node():
             params = self.params.copy()
             params[parameter] = value
             self.children.append(Node(self.weight*weight, params, distributions, self))
-
-
-if __name__ == "__main__":
-    main()

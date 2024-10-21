@@ -16,50 +16,56 @@ excecution: poetry run python displacements/displacements.py or call calculate_d
 
 logging.basicConfig(level = logging.INFO)
 logger = logging.getLogger('slope_analysis')
-figure_dir = None
 
 
-def displacement(ky, pga, M=None, pgv=None, model="scalar"):
+def displacement(logky, logpga, M=None, logpgv=None, model="scalar"):
     """ Calculation of ground displacements
     Implementation of the statistical model for ground displacements of natural slopes subject to earthquakes 
     given in [1]. Note: The statistical model is develpped for subaerial conditions.
     
     Parameters:
-        ky: float or ndarray 
-            Yield acceleration calculated using infinite slope analysis [g].
-        pga: float or ndarray. Same dimension as ky.
-            Peak ground acceleration of the event [g]. 
+        logky: float or ndarray 
+            Log (Base 10) of Yield acceleration calculated using infinite slope analysis [g].
+        logpga: float or ndarray. Same dimension as ky.
+            Log (Base 10) of Peak ground acceleration of the event [g]. 
         M: float
             moment magnitude of the event.
-        pgv: float or ndarray. Same dimension as ky.
-            Peak ground velocity of the event [cm/s].
+        logpgv: float or ndarray. Same dimension as ky.
+            Log (Base 10) of Peak ground velocity of the event [cm/s].
         model: string
             Different models. Options are "scalar" or "vector". If "scalar", then M must be supplied. 
             If "vector", then pgv must be supplied. Default is "scalar".
         
     Returns:
-        ln(displacements) [cm], standard_deviation: float or ndarray, float or ndarray
+        Log of displacements [cm], Log of standard_deviation: float or ndarray, float or ndarray
         Logarithm of estimated displacements and associated standard deviation. 
         Standard deviation of lognormal multiplicative noise (as a function of ky/pga).  
         
     1. Rathje and Saygili, ‘Probabilistic Assessment of Earthquake-Induced Sliding Displacements of Natural Slopes’.
     """
+    ky_pga_ratio = 10**(logky - logpga)
+    logscale_factor = np.log10(np.exp(1))
+    lnpga = logpga/logscale_factor
+    
+    plot_raster(ky_pga_ratio, "ky_pga_ratio.png")
+    
     if model == "scalar":
         a = [-29.06, 42.49, - 19.64,-4.85, 4.89] # polynomial coefficients.
-        ln_d = np.polyval(a, ky/pga) + 0.72*np.log(pga) + 0.89*(M-6)
-        sigma_ln = np.polyval([-0.539, 0.789, 0.732], ky/pga)
+        ln_d = np.where(ky_pga_ratio < 1., np.polyval(a, ky_pga_ratio) + 0.72*lnpga + 0.89*(M-6), 0.)
+        sigma_ln = np.where(ky_pga_ratio < 1., np.polyval([-0.539, 0.789, 0.732], ky_pga_ratio), 0.)
     elif model == "vector":
+        lnpgv = logpgv/np.log10(np.exp(1))
         a = [-30.5, 44.75, -20.84, -4.58, -1.56]
-        ln_d = np.polyval(a, ky/pga) - 0.64*np.log(pga) + 1.55*np.ln(pgv)
-        sigma_ln = 0.405 + 0.524*(ky/pga)
-    return(ln_d, sigma_ln)
+        ln_d = np.where(ky_pga_ratio < 1., np.polyval(a, ky_pga_ratio) - 0.64*lnpga + 1.55*lnpgv, 0)
+        sigma_ln = np.where(ky_pga_ratio, 0.405 + 0.524*(ky_pga_ratio), 0.)
+    return(ln_d*logscale_factor, sigma_ln*logscale_factor)
 
 
 def calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, write_displacements=False, make_plots=False):
     #pga=0.7
     magnitude = 7.
     shake_value = 'Z_pga'
-    nr_of_shake_samples = 3
+    nr_of_shake_samples = 10
     interpolation_method = 'linear' # “linear”, “nearest”, “slinear”, “cubic”, “quintic” and “pchip”
 
     # Load shakemaps from file 
@@ -78,24 +84,24 @@ def calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, w
         create_dir(figure_dir)
     
     # Load yield acceleration maps.
-    slope_analysis_output_folder = os.path.join(rundir, "slope_analysis")
+    ky_folder = os.path.join(rundir, "yield_acceleration")
 
     # load content file
-    with open(os.path.join(slope_analysis_output_folder, "content.json"),'r') as f:
+    with open(os.path.join(ky_folder, "content.json"),'r') as f:
         slope_analysis_output = json.load(f)
 
     # Read yield acceleration output from slope analysis.
     yield_acceleration_quantiles = [e for e in slope_analysis_output if e["value"] == "yield_acceleration"]
 
-    output = []
+    displacement_content, shakemap_content = [], []
     for shake_sample in range(nr_of_shake_samples):
         for i, element in enumerate(yield_acceleration_quantiles):
-            with rasterio.open(os.path.join(slope_analysis_output_folder, element["file"])) as src:
-                ky = src.read(1)
+            with rasterio.open(os.path.join(ky_folder, element["file"])) as src:
+                logky = src.read(1)
                 ky_profile = src.profile.copy()
                 if i == 0:
                     # New shakemap.
-                    pga = interpolate_shakemap(shakemaps=shakemaps,
+                    logpga = interpolate_shakemap(shakemaps=shakemaps,
                                         shake_value=shake_value,
                                         shake_sample=shake_sample,
                                         interpolation_method=interpolation_method,
@@ -103,33 +109,48 @@ def calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, w
                                         n_cols=ky_profile["width"],
                                         n_rows=ky_profile["height"])
                     if write_shakemaps:
-                        shakemap_file = os.path.join(shakemaps_dir, "pga_{}.tif".format(shake_sample))
-                        write_tif(shakemap_file, pga, ky_profile)
+                        filename = "pga_{}.tif".format(shake_sample)
+                        shakemap_content.append({
+                            "file": filename,
+                            "sample":shake_sample,
+                            "value":shake_value,
+                            "scale":"log10",
+                            "unit":"g"
+                        })
+                        write_tif(os.path.join(shakemaps_dir, filename), logpga, ky_profile)
             
                 # Calculate displacement quantiles 
                 # Here we apply the fact that displacements are decreasing with ky.
-                ln_d, ln_sigma = displacement(ky=ky, pga=pga, M=magnitude)
+                logd, logsigma = displacement(logky=logky, logpga=logpga, M=magnitude)
                 if make_plots:
-                    plot_raster(ln_d, "displacement_{}_{}.png".format(shake_sample, i))
+                    plot_raster(logd, "displacement_{}_{}.png".format(shake_sample, i))
+                
                 
                 if write_displacements:
                     filename = f"d_{i}_{shake_sample}.tif"
-                    output.append({
+                    displacement_content.append({
                         "file": filename, 
                         "quantile": 1. - element["quantile"],
                         "shakemaps_filename": shakemaps_filename,
                         "shakemap_sample": shake_sample,
                         "shake_value": shake_value,
                         "value": "displacement", 
-                        "scaling": "ln",
+                        "scale": "log10",
+                        "unit":"cm"
                         })
-                    write_tif(os.path.join(displacements_dir, filename), ln_d, ky_profile)
+                    write_tif(os.path.join(displacements_dir, filename), logd, ky_profile)
                 
     if write_displacements:
         content_file = os.path.join(displacements_dir, 'content.json')
         logger.info("Write file: {}".format(content_file))
         with open(content_file, 'w') as f:
-            json.dump(output, f, indent=4)
+            json.dump(displacement_content, f, indent=4)
+    
+    if write_shakemaps:
+        content_file = os.path.join(shakemaps_dir, 'content.json')
+        logger.info("Write file: {}".format(content_file))
+        with open(content_file, 'w') as f:
+            json.dump(shakemap_content, f, indent=4)
 
 
 def plot_raster(data, filename):
@@ -137,7 +158,9 @@ def plot_raster(data, filename):
         Applied to debug shakemap interpolation.
     """
     fig, ax = plt.subplots()
+    figure_dir = "figures"
     im = ax.imshow(data, interpolation='bilinear', origin='upper')
+    cbar = fig.colorbar(im, ax=ax, orientation='vertical', pad=0.01)
     plt.savefig(os.path.join(figure_dir, filename))
 
 
@@ -161,7 +184,7 @@ def interpolate_shakemap(shakemaps, shake_value, shake_sample, interpolation_met
     grid_int = np.meshgrid(np.linspace(bbox.left, bbox.right, num=n_cols), np.linspace(bbox.bottom, bbox.top, num=n_rows), indexing='ij')
     shake_values = shake_interp(grid_int)
     if make_plots:
-        plot_raster(shake_values, os.path.join(figure_dir, "shake_values.png"))
+        plot_raster(shake_values, "shake_values.png")
     return(np.flip(shake_values,-1).T)
 
 

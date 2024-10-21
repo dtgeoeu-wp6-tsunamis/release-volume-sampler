@@ -1,15 +1,14 @@
 import os, sys
-import subprocess
 import logging
+import numpy as np
 from datetime import datetime
-import shutil
-from slope_analysis.slope_analysis import run_analysis
+from slope_analysis.slope_analysis import SlopeAnalysis
 from preprocess.preprocess import preprocess, slope, aspect
 from slopeunits.slopeunits import run_grassjob
 from utils.utils import create_dir
 from displacements.displacements import calculate_displacements
 
-logging.basicConfig(level = logging.DEBUG)
+
 logger = logging.getLogger()
 logger.addHandler(logging.StreamHandler())
 
@@ -37,7 +36,7 @@ def main():
     
     generated = os.path.join(project_dir, "generated")
     scenario = "messina_001"
-    run = None #"messina_001_20240923_121008"
+    run = None #"messina_001_20241021_112925"
     
     if run is None:
         # Create time stamped rundir
@@ -52,7 +51,7 @@ def main():
     calculate_slopes_and_aspect = True
     calculate_slope_units = False
     run_slope_analysis = True
-    calculate_displacements_b = True
+    calculate_displacements_b = False
     
     # Computations
     if preprocess_bathy:
@@ -65,20 +64,21 @@ def main():
     if run_slope_analysis:
         execute_slope_analysis(rundir)
     if calculate_displacements_b:
-        calculate_displacements(rundir, shakemaps_filename, write_shakemaps=True, write_displacements=True, make_plots=True)
+        calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, write_displacements=True, make_plots=False)
 
 
 def execute_slope_analysis(rundir):
-    quantiles = [0.1, 0.2, 0.5]
+    #quantiles = [0.1, 0.2, 0.5]
+    quantiles = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.99]
     
     # Parameters defined as discrete distributions or constants.
     # May supply functional relations. Order according to dependencies.
     physical_parameters = {
         "distributions": {
-            "friction_angle": [(24.3, 1)], # [(value, weight),...]
-            "cohesion": [(20, 1)],
-            "thickness": [(3.6, 0.248), (4, 0.504),(4.4, 0.248)],
-            "density": [(1800, 0.5),(2000, 0.5)],
+            "friction_angle": [(8, 0.248), (16, 0.504), (24, 0.248)], # [(value, weight),...]
+            "cohesion": [(5, 0.248),(10,0.504),(15, 0.248)],
+            "thickness": [(1, 0.248), (3, 0.504),(5, 0.248)],
+            "density": [(1200, 0.248),(2000, 0.504),(3000, 0.248)],
         },
         "constants": {
             "density_of_water": 1020,
@@ -86,7 +86,16 @@ def execute_slope_analysis(rundir):
             "excess_pore_pressure": 0.
         }
     }
-    run_analysis(rundir, quantiles, physical_parameters, slopefile="slope.tif", write_fos=True, write_ky=True)
+    sa = SlopeAnalysis(rundir, physical_parameters, slopefile="slope.tif")
+    
+    quantiles = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.99]
+    #sa.compute_quantiles(quantiles, write_fos=True, write_ky=True)
+    
+    fos_thresholds = np.linspace(0, 3, num=10)
+    sa.compute_cummulative_fos(fos_thresholds, write_fos=True)
+    
+    ky_thresholds = np.linspace(0, 1, num=10)
+    sa.compute_cummulative_ky(ky_thresholds, write_ky=True)
 
 if __name__ == "__main__":
     main()
