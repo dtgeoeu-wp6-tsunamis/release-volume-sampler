@@ -2,23 +2,25 @@ import sys
 import os
 import logging
 import rasterio
+import json
 import numpy as np
 
 logger = logging.getLogger("utils")
 
 def read_tif(fname):
     "Read .tif data and profile using rasterio."
-    logger.info(f"Read file: {fname}")
+    #logger.info(f"Read file: {fname}")
     with rasterio.open(fname) as src:
-        data = np.ma.masked_equal(src.read(1), src.nodata)
-        msk = src.read_masks(1) 
+        #data = np.ma.masked_equal(src.read(1), src.nodata)
+        data = src.read(1)
+        msk = np.where(src.read_masks(1) == src.nodata, False, True)
         profile = src.profile.copy()
     return data, msk, profile
 
 
 def write_tif(fname, data, profile):
     "Write .tif data and profile using rasterio."
-    logger.info(f"Write file: {fname}")
+    #logger.info(f"Write file: {fname}")
     with rasterio.open(fname, 'w', **profile) as dst:
         dst.write(data, 1)
 
@@ -39,7 +41,12 @@ def log_process(completed_process, log_file):
             log.write("Process stdout: {}\n".format(completed_process.stdout.decode("utf-8")))
 
 
-def cummulative(samples, xs, weights, axis=-1):
+def write_content(content, output_dir):
+    with open(os.path.join(output_dir, 'content.json'), 'w') as f:
+        json.dump(content, f, indent=4)
+
+
+def cummulative(samples, xs, weights=None, axis=-1):
     """
     Get the cumulative probability of a list of weighted samples.
 
@@ -58,6 +65,9 @@ def cummulative(samples, xs, weights, axis=-1):
         cumulative probabilities P(s < x).
     
     """
+    if weights is None:
+        n = samples.shape[axis]
+        weights = np.ones(n)/n
     # First approach:
     #ind_order = np.argsort(samples, axis=axis)
     #sorted_samples = np.take_along_axis(samples, ind_order, axis=axis)
@@ -67,4 +77,5 @@ def cummulative(samples, xs, weights, axis=-1):
     #return(np.vstack([cumsum_weights[i, np.sum(sorted_samples < x, axis=-1)] for i,x in enumerate(xs)]))
     
     # Using np.average
-    return(np.vstack([np.average(samples < x, weights=weights, axis=axis) for x in xs]))
+    cummulative = np.vstack([np.average(samples < x, weights=weights, axis=axis) for x in xs])
+    return(np.nan_to_num(cummulative))

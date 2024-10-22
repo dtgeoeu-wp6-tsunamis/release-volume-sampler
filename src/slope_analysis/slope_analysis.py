@@ -59,7 +59,8 @@ class SlopeAnalysis:
         self.root_node = Node(weight=1, distributions=physical_parameters["distributions"], params=physical_parameters["constants"], parent=None)
         
         # Traverse leaf nodes and create linear interpolations for slope variation.
-        self.slopes = np.linspace(np.nanmin(self.slope_data), np.nanmax(self.slope_data), num=100)        
+        self.slopes = np.linspace(np.nanmin(self.slope_data), np.nanmax(self.slope_data), num=500)
+        logger.info(f"Slope range for lookuptable: {np.min(self.slopes)}, {np.max(self.slopes)}")
         kys, weights, foss = [], [], []
         sum_of_weights = 0.
         
@@ -73,8 +74,11 @@ class SlopeAnalysis:
         
         logger.info(f"Sum of weights: {sum_of_weights}")
         self.foss = np.stack(foss)
+        logger.info(f"foss.shape: {self.foss.shape}")
         self.kys = np.stack(kys)
+        logger.info(f"kys.shape: {self.kys.shape}")
         self.weights = np.array(weights)
+        logger.info(f"weights.shape: {self.weights.shape}")
     
     
     def compute_quantiles(self, quantiles, write_fos=False, write_ky=False):
@@ -99,62 +103,85 @@ class SlopeAnalysis:
         fos_quantiles = np.quantile(self.foss, quantiles, axis=0, weights=self.weights, method='inverted_cdf')
         ky_quantiles = np.quantile(self.kys, quantiles, axis=0, weights=self.weights, method='inverted_cdf')
         
-        if write_fos: create_dir(self.fos_dir)
-        if write_ky: create_dir(self.yield_acceleration_dir)
+        if write_fos: 
+            create_dir(self.fos_dir)
+            fos_quantile_dir = os.path.join(self.fos_dir, "quantiles")
+            create_dir(fos_quantile_dir)
+        if write_ky: 
+            create_dir(self.yield_acceleration_dir)
+            ky_quantile_dir = os.path.join(self.yield_acceleration_dir, "quantiles")
+            create_dir(ky_quantile_dir)
         
         # Evaluate quantiles by interpolation of lookuptables over topography and write to files.
         for i, quantile in enumerate(quantiles):
             ky_quantiles_filename, fos_quantiles_filename = f"ky_quantiles_{i}.tif", f"fos_quantiles_{i}.tif"
             
             if write_fos:
-                fos_quantiles_raster = np.interp(self.slope_data, self.slopes, fos_quantiles[i,:])
-                write_tif(fname = os.path.join(self.fos_dir, fos_quantiles_filename), data = fos_quantiles_raster, profile = self.slope_profile)
-                fos_output.append({"file": fos_quantiles_filename, "quantile": quantile, "value": "factor_of_safety", "scale": "log10", "unit":""})
+                fos_quantile_flat = np.interp(self.slope_data[self.slope_msk], self.slopes, fos_quantiles[i,:])
+                fos_quantile_raster = np.empty(self.slope_data.shape)
+                fos_quantile_raster[self.slope_msk] = fos_quantile_flat
+                fos_quantile_raster[~self.slope_msk] = np.nan
+                write_tif(fname = os.path.join(fos_quantile_dir, fos_quantiles_filename), data = fos_quantile_raster, profile = self.slope_profile)
+                fos_output.append({"file": fos_quantiles_filename, "quantile": quantile, "value": "log factor_of_safety", "scale": "log10", "unit":""})
         
             if write_ky: 
-                ky_quantiles_raster = np.interp(self.slope_data, self.slopes, ky_quantiles[i,:])
-                write_tif(fname = os.path.join(self.yield_acceleration_dir, ky_quantiles_filename), data = ky_quantiles_raster, profile = self.slope_profile)
-                ky_output.append({"file": ky_quantiles_filename, "quantile": quantile, "value": "yield_acceleration", "scale":"log10", "unit": "g"})
+                ky_quantile_flat = np.interp(self.slope_data[self.slope_msk], self.slopes, ky_quantiles[i,:])
+                ky_quantile_raster = np.empty(self.slope_data.shape)
+                ky_quantile_raster[self.slope_msk] = ky_quantile_flat
+                ky_quantile_raster[~self.slope_msk] = np.nan
+                write_tif(fname = os.path.join(ky_quantile_dir, ky_quantiles_filename), data = ky_quantile_raster, profile = self.slope_profile)
+                ky_output.append({"file": ky_quantiles_filename, "quantile": quantile, "value": "log yield_acceleration", "scale":"log10", "unit": "g"})
         
-        if write_fos: self.write_content(fos_output, self.fos_dir)
-        if write_ky: self.write_content(ky_output, self.yield_acceleration_dir)
+        if write_fos: self.write_content(fos_output, fos_quantile_dir)
+        if write_ky: self.write_content(ky_output, ky_quantile_dir)
     
     
     def compute_cummulative_fos(self, thresholds, write_fos=False):
         # Lookup table
         fos_cummulative = cummulative(self.foss, thresholds, weights=self.weights, axis=0)
+        logger.info(f"fos_cummulative shape: {fos_cummulative.shape}")
         
         if write_fos:
             output = []
             create_dir(self.fos_dir)
+            fos_cum_dir = os.path.join(self.fos_dir, "cummulative")
+            create_dir(fos_cum_dir)
         
             # Evaluate cummulative by interpolation and write to files.
             for i, threshold in enumerate(thresholds):
                 fos_cummulative_filename = f"fos_cum_{i}.tif"
-                fos_cummulative_raster = np.interp(self.slope_data, self.slopes, fos_cummulative[i,:])
-                write_tif(fname = os.path.join(self.fos_dir, fos_cummulative_filename), data = fos_cummulative_raster, profile = self.slope_profile)
-                output.append({"file": fos_cummulative_filename, "threshold":threshold, "value": "probability", "scale": "", "unit": ""})
+                fos_cummulative_flat = np.interp(self.slope_data[self.slope_msk], self.slopes, fos_cummulative[i,:])
+                fos_cummulative_raster = np.empty(self.slope_data.shape)
+                fos_cummulative_raster[self.slope_msk] = fos_cummulative_flat
+                fos_cummulative_raster[~self.slope_msk] = np.nan
+                write_tif(fname = os.path.join(fos_cum_dir, fos_cummulative_filename), data = fos_cummulative_raster, profile = self.slope_profile)
+                output.append({"file": fos_cummulative_filename, "threshold":threshold, "value": "cummulative of logfos", "scale": "", "unit": ""})
             
-            self.write_content(output, self.fos_dir)
+            self.write_content(output, fos_cum_dir)
         return(fos_cummulative)
     
     
     def compute_cummulative_ky(self, thresholds, write_ky=True):
         # Lookup table
-        ky_cummulative = cummulative(self.foss, thresholds, weights=self.weights, axis=0)
+        ky_cummulative = cummulative(self.kys, thresholds, weights=self.weights, axis=0)
         
         if write_ky:
             ky_output = []
             create_dir(self.yield_acceleration_dir)
+            ky_cum_dir = os.path.join(self.yield_acceleration_dir, "cummulative")
+            create_dir(ky_cum_dir)
             
             # Evaluate cummulative by interpolation and write to files.
             for i, threshold in enumerate(thresholds):
                 ky_cummulative_filename = f"ky_cum_{i}.tif"
-                ky_cummulative_raster = np.interp(self.slope_data, self.slopes, ky_cummulative[i,:])
-                write_tif(fname = os.path.join(self.yield_acceleration_dir, ky_cummulative_filename), data = ky_cummulative_raster, profile = self.slope_profile)
+                ky_cummulative_flat = np.interp(self.slope_data[self.slope_msk], self.slopes, ky_cummulative[i,:])
+                ky_cummulative_raster = np.empty(self.slope_data.shape)
+                ky_cummulative_raster[self.slope_msk] = ky_cummulative_flat
+                ky_cummulative_raster[~self.slope_msk] = np.nan
+                write_tif(fname = os.path.join(ky_cum_dir, ky_cummulative_filename), data = ky_cummulative_raster, profile = self.slope_profile)
                 ky_output.append({"file": ky_cummulative_filename, "threshold":threshold, "value": "probability", "scale": "", "unit": "g"})
             
-            self.write_content(ky_output, self.yield_acceleration_dir)
+            self.write_content(ky_output, ky_cum_dir)
         return(ky_cummulative)
         
     
@@ -207,14 +234,24 @@ class SlopeAnalysis:
         rho = density
         H = thickness
         alpha = np.radians(slope)
-        eps = 0.001 # truncation threshold.
+        eps = 1e-6 # truncation threshold.
         
         fos = np.where(np.sin(alpha) > eps, (c-u*mu)/(rho*H*gamma*g*np.sin(alpha)) + mu/np.tan(alpha), np.nan)
-        ky = np.where(np.sin(alpha) > eps, gamma*np.sin(alpha)*(fos-1.), np.nan)
+        #fos = (c-u*mu)/(rho*H*gamma*g*np.sin(alpha)) + mu/np.tan(alpha)
+        if np.sum(fos < 1) > 0:
+            logger.warning(f"FOS less than 1. Replace with 1.")
+            fos = np.where(fos < 1, 1., fos)
+        
+        #ky = np.where(np.sin(alpha) > eps, gamma*np.sin(alpha)*(fos-1.), np.nan) 
+        #ky = gamma*np.sin(alpha)*(fos-1.)
+        
+        fos_times_sin = (c-u*mu)/(rho*H*gamma*g) + mu*np.cos(alpha)
+        ky = gamma*(fos_times_sin-np.sin(alpha))
         
         if yield_angle is not None:
             psi = np.radians(yield_angle)
             ky = ky/(np.cos(psi-alpha) - np.sin(psi-alpha)*mu) # Correction factor
+        
         return np.log10(fos), np.log10(ky)
 
 

@@ -75,6 +75,7 @@ def plot(working_dir, logscale, m):
         raster_path = os.path.join(working_dir, e["file"])
         raster_data, msk, profile = read_tif(raster_path)
         
+        
         if not logscale and e["scale"] == "log10":
             logger.info("Transform output from log10 scale.")
             rasters.append(10**raster_data)
@@ -84,16 +85,13 @@ def plot(working_dir, logscale, m):
 
     # Get the global min and max across all rasters, ignoring no-data values
     global_min = min([np.nanmin(r) for r in rasters])
-    global_max = max(max([np.nanmax(r) for r in rasters]),m)
-
-    # Create a figure with subplots, one for each raster
-    fig, axes = plt.subplots(1, len(rasters), figsize=(16, 6), layout='compressed')
+    global_max = max(max([np.nanmax(r) for r in rasters]), m)
+    logger.info(f"global_min: {global_min}, global_max: {global_max}")
 
     # Loop through each raster and plot
     for i, e in enumerate(content):
         fig, ax = plt.subplots() 
         # Plot the raster with a shared color scale (global_min, global_max)
-            
         img = ax.imshow(rasters[i], vmin=global_min, vmax=global_max)
         
         # Add title
@@ -110,10 +108,11 @@ def plot(working_dir, logscale, m):
         # Add a single colorbar for the entire figure
         #cbar = fig.colorbar(img, ax=axes, orientation='vertical', fraction=0.08, pad=0.01)
         filename, value, unit = e["file"].replace(".tif",".png"), e["value"], e["unit"]
-        fig.colorbar(img, ax=ax, label=f"{value} ({unit})")
+        fig.colorbar(img, ax=ax, label=f"{value}")
 
         # Adjust layout and show the plot
         fig.savefig(os.path.join(plot_dir, filename))
+        plt.close()
     
     
 if __name__ == "__main__":
