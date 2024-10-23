@@ -1,198 +1,123 @@
-
-import rasterio
 import numpy as np
 import os
 import logging
 import json
-from scipy.interpolate import RegularGridInterpolator
-import matplotlib.pyplot as plt
 
-from utils.utils import create_dir, read_tif, write_tif
+from utils.utils import create_dir, read_tif, write_tif, write_content
 
-""" Cacluation of displacements from yield acceleration and shakemaps.
-
-excecution: poetry run python displacements/displacements.py or call calculate_displacements from main.py.
+""" Cacluation of displacements probabilities from yield acceleration and shakemaps.
 """
 
-logging.basicConfig(level = logging.INFO)
-logger = logging.getLogger('slope_analysis')
+#logging.basicConfig(level = logging.INFO)
+logger = logging.getLogger('displacements')
 
-
-def displacement(logky, logpga, M=None, logpgv=None, model="scalar"):
-    """ Calculation of ground displacements
-    Implementation of the statistical model for ground displacements of natural slopes subject to earthquakes 
-    given in [1]. Note: The statistical model is develpped for subaerial conditions.
+class DsiplacementProbabilityAggregator:
     
-    Parameters:
-        logky: float or ndarray 
-            Log (Base 10) of Yield acceleration calculated using infinite slope analysis [g].
-        logpga: float or ndarray. Same dimension as ky.
-            Log (Base 10) of Peak ground acceleration of the event [g]. 
-        M: float
-            moment magnitude of the event.
-        logpgv: float or ndarray. Same dimension as ky.
-            Log (Base 10) of Peak ground velocity of the event [cm/s].
-        model: string
-            Different models. Options are "scalar" or "vector". If "scalar", then M must be supplied. 
-            If "vector", then pgv must be supplied. Default is "scalar".
+    def __init__(self, rundir, displacement_thresholds):
+        self.rundir = rundir
+        self.displacement_thresholds = displacement_thresholds
         
-    Returns:
-        Log of displacements [cm], Log of standard_deviation: float or ndarray, float or ndarray
-        Logarithm of estimated displacements and associated standard deviation. 
-        Standard deviation of lognormal multiplicative noise (as a function of ky/pga).  
+        self.ky_dir = os.path.join(rundir, "yield_acceleration/cummulative")
+        self.pga_dir = os.path.join(rundir, "shakemaps")
+
+
+    def compute_probabilities(self):
+        logger.info("Calculating displacement probabilities.")
+        # Create output dir
+        output_dir = os.path.join(self.rundir, "displacements")
+        create_dir(output_dir)
         
-    1. Rathje and Saygili, ‘Probabilistic Assessment of Earthquake-Induced Sliding Displacements of Natural Slopes’.
-    """
-    ky_pga_ratio = 10**(logky - logpga)
-    logscale_factor = np.log10(np.exp(1))
-    lnpga = logpga/logscale_factor
-    
-    plot_raster(ky_pga_ratio, "ky_pga_ratio.png")
-    
-    if model == "scalar":
-        a = [-29.06, 42.49, - 19.64,-4.85, 4.89] # polynomial coefficients.
-        ln_d = np.where(ky_pga_ratio < 1., np.polyval(a, ky_pga_ratio) + 0.72*lnpga + 0.89*(M-6), 0.)
-        sigma_ln = np.where(ky_pga_ratio < 1., np.polyval([-0.539, 0.789, 0.732], ky_pga_ratio), 0.)
-    elif model == "vector":
-        lnpgv = logpgv/np.log10(np.exp(1))
-        a = [-30.5, 44.75, -20.84, -4.58, -1.56]
-        ln_d = np.where(ky_pga_ratio < 1., np.polyval(a, ky_pga_ratio) - 0.64*lnpga + 1.55*lnpgv, 0)
-        sigma_ln = np.where(ky_pga_ratio, 0.405 + 0.524*(ky_pga_ratio), 0.)
-    return(ln_d*logscale_factor, sigma_ln*logscale_factor)
+        # Load and compute probability densities.
+        cummulative_ky, ky_thresholds, profile = self.load_cummulative(self.ky_dir)
+        cummulative_pga, pga_thresholds, profile = self.load_cummulative(self.pga_dir)
+        ky_density = np.diff(cummulative_ky, axis=0)
+        pga_density = np.diff(cummulative_pga, axis=0)
+        
+        M = 7 # Need to embed also magnitude as a distribution in the grid..
 
+        # Compute displacement at grid centers
+        ky_centers = 0.5*(ky_thresholds[1:] + ky_thresholds[:-1])
+        pga_centers = 0.5*(pga_thresholds[1:] + pga_thresholds[:-1])
+        kys, pgas = np.meshgrid(ky_centers, pga_centers)
+        log_d, log_sigma = self.displacement(kys, pgas, M)
 
-def calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, write_displacements=False, make_plots=False):
-    #pga=0.7
-    magnitude = 7.
-    shake_value = 'Z_pga'
-    nr_of_shake_samples = 10
-    interpolation_method = 'linear' # “linear”, “nearest”, “slinear”, “cubic”, “quintic” and “pchip”
-
-    # Load shakemaps from file 
-    with open(shakemaps_filename, 'r') as f:
-        shakemaps = json.load(f)
-    
-    # Create output directories
-    if write_displacements:
-        displacements_dir = os.path.join(rundir, "displacements")
-        create_dir(displacements_dir)
-    if write_shakemaps:
-        shakemaps_dir = os.path.join(rundir, "shakemaps")
-        create_dir(shakemaps_dir)
-    if make_plots:
-        figure_dir = os.path.join(rundir, "figures")
-        create_dir(figure_dir)
-    
-    # Load yield acceleration maps.
-    ky_folder = os.path.join(rundir, "yield_acceleration")
-
-    # load content file
-    with open(os.path.join(ky_folder, "content.json"),'r') as f:
-        slope_analysis_output = json.load(f)
-
-    # Read yield acceleration output from slope analysis.
-    yield_acceleration_quantiles = [e for e in slope_analysis_output if e["value"] == "yield_acceleration"]
-
-    displacement_content, shakemap_content = [], []
-    for shake_sample in range(nr_of_shake_samples):
-        for i, element in enumerate(yield_acceleration_quantiles):
-            with rasterio.open(os.path.join(ky_folder, element["file"])) as src:
-                logky = src.read(1)
-                ky_profile = src.profile.copy()
-                if i == 0:
-                    # New shakemap.
-                    logpga = interpolate_shakemap(shakemaps=shakemaps,
-                                        shake_value=shake_value,
-                                        shake_sample=shake_sample,
-                                        interpolation_method=interpolation_method,
-                                        bbox=src.bounds,
-                                        n_cols=ky_profile["width"],
-                                        n_rows=ky_profile["height"])
-                    if write_shakemaps:
-                        filename = "pga_{}.tif".format(shake_sample)
-                        shakemap_content.append({
-                            "file": filename,
-                            "sample":shake_sample,
-                            "value":shake_value,
-                            "scale":"log10",
-                            "unit":"g"
-                        })
-                        write_tif(os.path.join(shakemaps_dir, filename), logpga, ky_profile)
+        # Compute probabilities and write to files
+        content = []
+        for i,delta in enumerate(self.displacement_thresholds):
+            logger.info(f"Delta: {delta}")
+            d_is_bigger = log_d > np.log10(delta)
+            probs = np.sum((pga_density[:,np.newaxis]*ky_density[np.newaxis,:])[d_is_bigger,:], axis=0)
             
-                # Calculate displacement quantiles 
-                # Here we apply the fact that displacements are decreasing with ky.
-                logd, logsigma = displacement(logky=logky, logpga=logpga, M=magnitude)
-                if make_plots:
-                    plot_raster(logd, "displacement_{}_{}.png".format(shake_sample, i))
-                
-                
-                if write_displacements:
-                    filename = f"d_{i}_{shake_sample}.tif"
-                    displacement_content.append({
-                        "file": filename, 
-                        "quantile": 1. - element["quantile"],
-                        "shakemaps_filename": shakemaps_filename,
-                        "shakemap_sample": shake_sample,
-                        "shake_value": shake_value,
-                        "value": "displacement", 
-                        "scale": "log10",
-                        "unit":"cm"
-                        })
-                    write_tif(os.path.join(displacements_dir, filename), logd, ky_profile)
-                
-    if write_displacements:
-        content_file = os.path.join(displacements_dir, 'content.json')
-        logger.info("Write file: {}".format(content_file))
-        with open(content_file, 'w') as f:
-            json.dump(displacement_content, f, indent=4)
+            # Non vectorized implementation (slow).
+            # probs = np.zeros(pga_density.shape[1:])
+            # for i in range(pga_density.shape[1]):
+            #     for j in range(pga_density.shape[2]):
+            #         probs[i,j] = np.sum(np.outer(pga_density[:,i,j], ky_density[:,i,j])[d_is_bigger])
+            
+            # Write to file
+            filename = f"exceedance_prob_{i}.tif"
+            content.append({"file": filename, "threshold": delta, "value": "exceedance prob.", "unit":"", "scale":""})
+            write_tif(os.path.join(output_dir, filename), probs, profile)
+        write_content(content, output_dir)
+
+
+    @staticmethod
+    def load_cummulative(dir):
+        # load json file
+        with open(os.path.join(dir, "content.json"),'r') as f:
+            content = json.load(f)
+
+        # Initialize lists to store raster data and no-data values
+        rasters = []
+        thresholds = []
+        #nodata_vals = []
+
+        # Read all rasters and store the data
+        for e in content:
+            thresholds.append(e["threshold"])
+            raster_path = os.path.join(dir, e["file"])
+            raster_data, msk, profile = read_tif(raster_path)
+            rasters.append(raster_data)
+        return(np.stack(rasters), np.array(thresholds), profile)
     
-    if write_shakemaps:
-        content_file = os.path.join(shakemaps_dir, 'content.json')
-        logger.info("Write file: {}".format(content_file))
-        with open(content_file, 'w') as f:
-            json.dump(shakemap_content, f, indent=4)
-
-
-def plot_raster(data, filename):
-    """
-        Applied to debug shakemap interpolation.
-    """
-    fig, ax = plt.subplots()
-    figure_dir = "figures"
-    im = ax.imshow(data, interpolation='bilinear', origin='upper')
-    cbar = fig.colorbar(im, ax=ax, orientation='vertical', pad=0.01)
-    plt.savefig(os.path.join(figure_dir, filename))
-
-
-def interpolate_shakemap(shakemaps, shake_value, shake_sample, interpolation_method, bbox, n_rows, n_cols, make_plots=False):
-    # Create grid interpolator
-    lon_shake, lat_shake, data = zip(*[(point['lon'], point['lat'], point[shake_value][shake_sample]) for _, point in shakemaps.items()])
-    grid_shake = np.array(list(set(lon_shake))), np.array(list(set(lat_shake))) # Extract unique values 
-    [g.sort() for g in grid_shake] # in ascending order.
-    grid_shake_shape = grid_shake[0].shape[0], grid_shake[1].shape[0]
-    data = np.reshape(data, grid_shake_shape, order='C') # Reshape data. 
-    # Lon fixed, Lat change -> C order. Location of data(ij): lowerleft + (j*delta_lat, i*delta_lon) 
-    if make_plots:
-        plot_raster(np.flip(data.T,-1), os.path.join(figure_dir, "shakemap.png"))
-    shake_interp = RegularGridInterpolator(points=grid_shake, values=np.flip(data.T,-1), method=interpolation_method) # Data need to be ij matrix format (See np.meshgrid)
     
-    # verify that interpolation is exact at grid values.RSS nonzero with flipped axes...
-    #rss = np.array([(shake_interp((point['lon'], point['lat'])) - point[shake_value][shake_sample])**2 for _,point in shakemaps.items()]).sum()
-    #logger.debug("RSS at grid points: {}".format(rss))
-    
-    # Interpolate grid.
-    grid_int = np.meshgrid(np.linspace(bbox.left, bbox.right, num=n_cols), np.linspace(bbox.bottom, bbox.top, num=n_rows), indexing='ij')
-    shake_values = shake_interp(grid_int)
-    if make_plots:
-        plot_raster(shake_values, "shake_values.png")
-    return(np.flip(shake_values,-1).T)
-
-
-def main():
-    rundir = "/home/ebr/projects/release-volume-sampler/generated/messina_001_20241010_134621"
-    shakemaps_filename = "/home/ebr/projects/release-volume-sampler/input/shakemaps/messina_1908/predicted_data_NN_Messina_1908.json"
-    
-    calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, write_displacements=True, make_plots=True)
-
-if __name__ == "__main__":
-    main()
+    @staticmethod
+    def displacement(logky, logpga, M=None, logpgv=None, model="scalar"):
+        """ Calculation of ground displacements
+        Implementation of the statistical model for ground displacements of natural slopes subject to earthquakes 
+        given in [1]. Note: The statistical model is develpped for subaerial conditions.
+        
+        Parameters:
+            logky: float or ndarray 
+                Log (Base 10) of Yield acceleration calculated using infinite slope analysis [g].
+            logpga: float or ndarray. Same dimension as ky.
+                Log (Base 10) of Peak ground acceleration of the event [g]. 
+            M: float
+                moment magnitude of the event.
+            logpgv: float or ndarray. Same dimension as ky.
+                Log (Base 10) of Peak ground velocity of the event [cm/s].
+            model: string
+                Different models. Options are "scalar" or "vector". If "scalar", then M must be supplied. 
+                If "vector", then pgv must be supplied. Default is "scalar".
+            
+        Returns:
+            Log of displacements [cm], Log of standard_deviation: float or ndarray, float or ndarray
+            Logarithm of estimated displacements and associated standard deviation. 
+            Standard deviation of lognormal multiplicative noise (as a function of ky/pga).  
+            
+        1. Rathje and Saygili, ‘Probabilistic Assessment of Earthquake-Induced Sliding Displacements of Natural Slopes’.
+        """
+        ky_pga_ratio = 10**(logky - logpga)
+        logscale_factor = np.log10(np.exp(1))
+        lnpga = logpga/logscale_factor
+        
+        if model == "scalar":
+            a = [-29.06, 42.49, - 19.64,-4.85, 4.89] # polynomial coefficients.
+            ln_d = np.where(ky_pga_ratio < 1., np.polyval(a, ky_pga_ratio) + 0.72*lnpga + 0.89*(M-6), 0.)
+            sigma_ln = np.where(ky_pga_ratio < 1., np.polyval([-0.539, 0.789, 0.732], ky_pga_ratio), 0.)
+        elif model == "vector":
+            lnpgv = logpgv/np.log10(np.exp(1))
+            a = [-30.5, 44.75, -20.84, -4.58, -1.56]
+            ln_d = np.where(ky_pga_ratio < 1., np.polyval(a, ky_pga_ratio) - 0.64*lnpga + 1.55*lnpgv, 0)
+            sigma_ln = np.where(ky_pga_ratio, 0.405 + 0.524*(ky_pga_ratio), 0.)
+        return(ln_d*logscale_factor, sigma_ln*logscale_factor)

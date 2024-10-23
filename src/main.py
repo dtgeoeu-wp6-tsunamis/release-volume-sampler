@@ -6,7 +6,7 @@ from slope_analysis.slope_analysis import SlopeAnalysis
 from preprocess.preprocess import preprocess, slope, aspect
 from slopeunits.slopeunits import run_grassjob
 from utils.utils import create_dir
-from displacements.displacements import calculate_displacements
+from displacements.displacements import DsiplacementProbabilityAggregator
 from shakemap_reader.shakemaps_reader import ShakemapsAggregator
 from collections import namedtuple
 import rasterio
@@ -41,7 +41,7 @@ def main():
     
     generated = os.path.join(project_dir, "generated")
     scenario = "messina_001"
-    run = None #"messina_001_20241022_084825"
+    run = "messina_001_20241023_071936"
     
     if run is None:
         # Create time stamped rundir
@@ -52,7 +52,8 @@ def main():
     logfile = os.path.join(rundir,"log.txt")
     create_dir(rundir)    
     
-    logFormatter = logging.Formatter("%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s")
+    #logFormatter = logging.Formatter("%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s")
+    logFormatter = logging.Formatter("'%(levelname)s:%(message)s'")
 
     fileHandler = logging.FileHandler(os.path.join(rundir, "run.log"))
     fileHandler.setFormatter(logFormatter)
@@ -61,21 +62,23 @@ def main():
     consoleHandler = logging.StreamHandler()
     consoleHandler.setFormatter(logFormatter)
     logger.addHandler(consoleHandler)
+   
     
     # preprocess_bathy:
-    run_preprocess(bathyfile, singularity_image, rundir, logfile)
+    #run_preprocess(bathyfile, singularity_image, rundir, logfile)
     
     #calculate_slope_units:
     #run_grassjob(singularity_image, project_dir, rundir, logfile=logfile)
     
     #run_slope_analysis:
-    execute_slope_analysis(rundir)
+    #execute_slope_analysis(rundir)
     
     # Parse and aggregate
-    aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename, bathyfile)
+    #aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename, bathyfile)
     
-    #calculate_displacements_b:
-    #calculate_displacements(rundir, shakemaps_filename, write_shakemaps=False, write_displacements=True, make_plots=False)
+    #calculate displacement probabilities
+    calculate_displacement_probabilities(rundir)
+    
 
 def run_preprocess(bathyfile, singularity_image, rundir, logfile):
     bathyfile = preprocess(bathyfile, singularity_image, map_projection_epsg=None, output_dir=rundir, logfile=logfile)
@@ -136,6 +139,12 @@ def execute_slope_analysis(rundir):
     
     ky_thresholds = np.linspace(-1,1, num=20)
     sa.compute_cummulative_ky(ky_thresholds, write_ky=True)
+
+
+def calculate_displacement_probabilities(rundir):
+    thresholds = np.arange(1, 3, step=0.2) # Displacement thresholds in cm.
+    dpa = DsiplacementProbabilityAggregator(rundir, thresholds)
+    dpa.compute_probabilities()
 
 if __name__ == "__main__":
     main()

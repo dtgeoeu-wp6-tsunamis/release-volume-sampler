@@ -1,6 +1,6 @@
 
-import rasterio
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 import os
 import numpy as np
 import json
@@ -93,6 +93,7 @@ def plot(working_dir, logscale, m):
         fig, ax = plt.subplots() 
         # Plot the raster with a shared color scale (global_min, global_max)
         img = ax.imshow(rasters[i], vmin=global_min, vmax=global_max)
+        #img = ax.imshow(rasters[i], norm=LogNorm())
         
         # Add title
         if "quantile" in e.keys():
