@@ -30,6 +30,10 @@ plots:
 	python src/plot.py $(RUNDIR)/shakemaps --logscale	
 	python src/plot.py $(RUNDIR)/shakemaps --logscale	
 
+	@echo " Plot displacements..."
+	python src/plot.py $(RUNDIR)/displacements --logscale	
+	python src/plot.py $(RUNDIR)/displacements --logscale	
+
 # Help target
 help:
 	@echo "Makefile for Generation of Release Volumes"

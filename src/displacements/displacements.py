@@ -13,12 +13,13 @@ logger = logging.getLogger('displacements')
 
 class DsiplacementProbabilityAggregator:
     
-    def __init__(self, rundir, displacement_thresholds):
+    def __init__(self, rundir, displacement_thresholds, magnitude):
         self.rundir = rundir
         self.displacement_thresholds = displacement_thresholds
         
         self.ky_dir = os.path.join(rundir, "yield_acceleration/cummulative")
         self.pga_dir = os.path.join(rundir, "shakemaps")
+        self.magnitude = magnitude # Used for calculation of displacement. Ideally be embedded as a distribution, but not very sensitive.
 
 
     def compute_probabilities(self):
@@ -33,13 +34,12 @@ class DsiplacementProbabilityAggregator:
         ky_density = np.diff(cummulative_ky, axis=0)
         pga_density = np.diff(cummulative_pga, axis=0)
         
-        M = 7 # Need to embed also magnitude as a distribution in the grid..
 
         # Compute displacement at grid centers
         ky_centers = 0.5*(ky_thresholds[1:] + ky_thresholds[:-1])
         pga_centers = 0.5*(pga_thresholds[1:] + pga_thresholds[:-1])
         kys, pgas = np.meshgrid(ky_centers, pga_centers)
-        log_d, log_sigma = self.displacement(kys, pgas, M)
+        log_d, log_sigma = self.displacement(kys, pgas, self.magnitude)
 
         # Compute probabilities and write to files
         content = []

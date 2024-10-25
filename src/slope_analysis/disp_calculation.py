@@ -23,12 +23,14 @@ def read_tif(fname, dtype):
         profile = src.profile.copy()
     return data, profile
 
+
 def read_tif2(fname, dtype):
     "Read .tif data and profile all bands using rasterio ."
     with rio.open(fname) as src:
         data = src.read().astype(dtype)
         profile = src.profile.copy()
     return data, profile
+
 
 def output_file(fname, data, profile):
     """
@@ -41,6 +43,7 @@ def output_file(fname, data, profile):
     """
     with rio.open(fname, 'w', **profile, encoding='utf-8') as dst:
         dst.write(data)
+
 
 def calc_disp(ky, pga, pgv):
     """
