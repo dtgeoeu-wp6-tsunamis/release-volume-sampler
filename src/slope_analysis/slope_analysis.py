@@ -159,13 +159,13 @@ class SlopeAnalysis:
         if write_ky: self.write_content(ky_output, ky_quantile_dir)
     
     
-    def compute_cummulative(self, thresholds, feature_name="logfos", write=False):
+    def compute_cummulative(self, thresholds, feature_name="logfos", write=False, output_dir=None):
         if feature_name == "logfos":
             feature = self.foss
-            dir = self.fos_dir
+            dir = self.fos_dir if output_dir is None else output_dir
         elif feature_name == "logky":
             feature = self.kys
-            dir = self.yield_acceleration_dir
+            dir = self.yield_acceleration_dir if output_dir is None else output_dir
         else:
             raise ValueError("feature name must be either logfos of logky.")
         

@@ -5,13 +5,11 @@ from datetime import datetime
 from slope_analysis.slope_analysis import SlopeAnalysis
 from preprocess.preprocess import preprocess, slope, aspect
 from slopeunits.slopeunits import run_grassjob
+from displacements.displacements import displacement
 from utils.utils import create_dir
-from displacements.displacements import DsiplacementProbabilityAggregator
-from shakemap_reader.shakemaps_reader import ShakemapsAggregator
 from collections import namedtuple
-import rasterio
 import shutil
-
+import json
 
 logging.basicConfig(level = logging.INFO)
 logger = logging.getLogger()
@@ -19,26 +17,28 @@ logger = logging.getLogger()
 
 def main():
     """
+    This script performs stability analysis in the sought region. Based on this analysis a selection
+    of possible release volumes are generated.
+    
     Outline:
-        - Create scenario folder
-        - Copy bathymetry into scenario folder (bathy.tif)
+        - Create analysis dir.
+        - Copy bathymetry into analysis dir (bathy.tif)
         
-        - Calculate slope/aspect (This may be done using either grass or whitebox tools)
-        - Calculate slopeunits using r.slopeunits https://doi.org/10.5194/gmd-9-3975-2016
+        - Calculate slope/aspect using whitebox tools.
+        (- Calculate slopeunits using r.slopeunits https://doi.org/10.5194/gmd-9-3975-2016)
         
-        - Calculate yield accelerations.
-        - Calculate displacements from yield acellerations and PGA.
-        - Get volumes by thresshold.
-        - Intersect with slopeunits.
+        - Find yield acceleration threshold values from displacement and pga range.
+        - Select volumes by intersecting yield acceleration thresholds for each slopeunit.
         
+        # Preparation for scenario selection
+        - Calculate cummulative probabilities of yield acceleration. 
     """
     # Settings
     project_dir = "/home/ebr/projects/release-volume-sampler"
     # Bathy
     bathyfile = os.path.join(project_dir, "input/bathy/messina_001/localMessinaBathy.tif")
-    # Shakemaps
-    shakemaps_filename = os.path.join(project_dir, "input/shakemaps/messina_1908/predicted_data_NN_Messina_1908.json")
-    source_parameters_filename = os.path.join(project_dir, "input/shakemaps/messina_1908/source_parameters.csv")
+    
+    
     # Soilparams.
     soilregions_filename = os.path.join(project_dir, "input/soilparams/regions.tif")
     soil_parameters_filename = os.path.join(project_dir, "input/soilparams/params.json")
@@ -47,15 +47,16 @@ def main():
     singularity_image = os.path.join(project_dir, "images/grass.sif")
     
     generated = os.path.join(project_dir, "generated")
+    slopeunitsfile = os.path.join(generated, "slopeunits/slumap_clean.tif")
     scenario = "messina_001"
-    run = None #"messina_001_20241023_071936"
+    #run = None #"messina_001_20241023_071936"
     
-    if run is None:
+    #if run is None:
         # Create time stamped rundir
-        formatted_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run = f"{scenario}_{formatted_datetime}"
+    #    formatted_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #    run = f"{scenario}_{formatted_datetime}"
     
-    rundir =  os.path.join(generated, run)
+    rundir =  os.path.join(generated, scenario)
     logfile = os.path.join(rundir, "log.txt")
     create_dir(rundir)    
     
@@ -74,17 +75,11 @@ def main():
     # preprocess_bathy:
     run_preprocess(bathyfile, soilregions_filename, soil_parameters_filename, singularity_image, rundir, logfile)
     
-    #calculate_slope_units:
-    #run_grassjob(singularity_image, project_dir, rundir, logfile=logfile)
-    
     #run_slope_analysis:
-    execute_slope_analysis(rundir)
+    #execute_slope_analysis(rundir)
     
-    # Parse and aggregate
-    aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename, bathyfile)
-    
-    #calculate displacement probabilities
-    calculate_displacement_probabilities(rundir)
+    # Preselection of volumes.
+    preselect_volumes(rundir, slopeunitsfile)
     
 
 def run_preprocess(bathyfile, soilparamsfile, soilregionsfile, singularity_image, rundir, logfile):
@@ -99,35 +94,10 @@ def run_preprocess(bathyfile, soilparamsfile, soilregionsfile, singularity_image
     aspect(bathyfile, output_dir=rundir, logfile=logfile)
 
 
-def aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename, bathyfile):
-        
-    def shake_value_function(point):
-        # Pullback function to extract value from shakemap.
-        Z, H = [10**np.array(point[shake_param]) for shake_param in ["Z_pga", "H_pga"]]
-        return np.log10(np.sqrt(Z**2 + H**2))
-    
-    shakemaps_aggregator = ShakemapsAggregator(
-        shakemaps_filename=shakemaps_filename,
-        source_parameters_filename=source_parameters_filename,
-        thresholds=np.linspace(-3,0,30),
-        shake_value={"name": "pga", "function":shake_value_function},
-        rundir=rundir)
-    
-    # Interpolate cummulative over computational region and write to files
-    with rasterio.open(bathyfile) as src:
-        bounds = src.bounds
-        profile = src.profile.copy()
-    
-    shakemaps_aggregator.write_cummulative(profile, bounds, 'linear')
-    # “linear”, “nearest”, “slinear”, “cubic”, “quintic” and “pchip”
-
-
 def execute_slope_analysis(rundir):
-    #quantiles = [0.1, 0.2, 0.5]
-    quantiles = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.99]
-    
-    # Parameters defined as discrete distributions or constants.
-    # May supply functional relations. Order according to dependencies.
+    """
+    Parameters defined as discrete distributions or constants.
+    May supply functional relations. Order according to dependencies.
     physical_parameters = {
         "distributions": {
             "friction_angle": [(18, 0.248), (22, 0.504), (25, 0.248)], # [(value, weight),...]
@@ -141,22 +111,51 @@ def execute_slope_analysis(rundir):
             "excess_pore_pressure": 0.
         }
     }
+    """
     sa = SlopeAnalysis(rundir, slopefile="slope.tif")
     
-    quantiles = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.99]
+    quantiles = [0.01, 0.1, 0.5, 0.9, 0.99]
     sa.compute_quantiles(quantiles, write_fos=True, write_ky=True)
     
     fos_thresholds = np.linspace(0, 2, num=20)
     sa.compute_cummulative(fos_thresholds, feature_name="logfos", write=True)
     
-    ky_thresholds = np.linspace(-1,1, num=20)
+    ky_thresholds = np.linspace(-3,1, num=20)
     sa.compute_cummulative(ky_thresholds, feature_name="logky", write=True)
 
 
-def calculate_displacement_probabilities(rundir):
-    thresholds = np.arange(1, 3, step=0.2) # Displacement thresholds in cm.
-    dpa = DsiplacementProbabilityAggregator(rundir, thresholds, magnitude=7)
-    dpa.compute_probabilities()
+def preselect_volumes(rundir, slopeunitsfile):
+    volume_selection_dir = os.path.join(os.path.join(rundir, "volume_selection"))
+    create_dir(volume_selection_dir)
+    
+    logpgas = np.log10([0.3, 0.6, 1.])
+    logdelta = np.log10(30.)
+    magnitude = 7.
+    probability_threshold = 0.5
+    
+    selection_criteria = []
+    logky = np.linspace(-5,1,200000)
+    for logpga in logpgas:
+        # Extract biggest yield acelleration with displacement larger than delta.
+        more_than_delta = displacement(logky=logky, logpga=logpga, M=magnitude)[0] > logdelta
+        root_logky = logky[more_than_delta][-1]
+        selection_criteria.append({"logky": root_logky, 
+                                   "delta": 10**logdelta, 
+                                   "pga": 10**logpga, 
+                                   "M":magnitude})
+    
+    with open(os.path.join(volume_selection_dir, 'selection_criteria.json'), 'w') as f:
+        json.dump(selection_criteria, f, indent=4)
+    
+    # Extract areas using the Cummulative distribution of logky.
+    sa = SlopeAnalysis(rundir, slopefile="slope.tif")
+    sa.compute_cummulative([params["logky"] for params in selection_criteria], 
+                           feature_name="logky", 
+                           write=True, 
+                           output_dir=volume_selection_dir)
+    
+    # Loop through slopeunits and intersect with cumulative thresholds.
+
 
 if __name__ == "__main__":
     main()

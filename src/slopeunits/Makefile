@@ -19,7 +19,8 @@ shell:
 	singularity shell $(IMAGE_PATH)
 
 start_project:
-	cd $(RUNDIR) && grass grassdata/PERMANENT
+	cd $(RUNDIR) && grass grassdata/PERMANENT 
+
 
 # Clean up the built image
 delete_image:

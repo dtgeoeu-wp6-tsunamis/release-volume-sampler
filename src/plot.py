@@ -92,7 +92,7 @@ def plot(working_dir, logscale, m):
     for i, e in enumerate(content):
         fig, ax = plt.subplots() 
         # Plot the raster with a shared color scale (global_min, global_max)
-        img = ax.imshow(rasters[i], vmin=global_min, vmax=global_max)
+        img = ax.imshow(rasters[i], vmin=global_min, vmax=global_max, cmap='tab20b_r')
         #img = ax.imshow(rasters[i], norm=LogNorm())
         
         # Add title
