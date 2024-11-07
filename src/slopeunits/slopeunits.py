@@ -4,8 +4,9 @@ import logging
 from datetime import datetime
 import shutil
 import argparse
+import rasterio
 
-logging.basicConfig(level = logging.DEBUG)
+logging.basicConfig(level = logging.INFO)
 logger = logging.getLogger("slopeunits")
 
 
@@ -44,22 +45,23 @@ def parse_args():
         
     return args
 
+
 def run_grassjob(rundir, singularity_image, bathy):
     """
     Create grass project from bathy in rundir.
     run grassjob.sh: calculates slopes and slopeunits.
+    Reproject slopeunits using gdalwarp so the raster is alligned with the bathymetri.
     
     grass -e -c $rundir/bathy.tif [rundir]/grassdata
     grass $grass_project/PERMANENT --exec sh grassjob.sh $rundir
     """
     #grass_project = os.path.join(rundir, "grassdata")
     grass_project = "grassdata"
-    slopeunits_dir = os.path.join(rundir,"slopeunits")
+    slopeunits_dir = os.path.join(rundir, "slopeunits")
     create_dir(slopeunits_dir)
     
     logfile = os.path.join(slopeunits_dir, "log.txt")
 
-    
     if not os.path.exists(grass_project):
         logger.info(f"Creating Grass GIS project from {bathy} in {slopeunits_dir}.")
         completed_proc = subprocess.run(
@@ -84,6 +86,7 @@ def run_grassjob(rundir, singularity_image, bathy):
         logger.error(f"Cannot execute grassjob. No such file: {grassjob}.")
     shutil.copy(grassjob, slopeunits_dir)
     
+    logger.info("Run grassjob.sh.")
     completed_proc = subprocess.run(
         ["singularity",
         "exec",
@@ -100,27 +103,44 @@ def run_grassjob(rundir, singularity_image, bathy):
     completed_proc.check_returncode()  # raise CalledProcessError if return code is non-zero.
     log_process(completed_proc, logfile)
     
-    # Reproject output to fit bathymetri using gdalwarp
     
-    _,_, bathy_profile = read_tif(bathy)
-    # gdalwarp -t_srs EPSG:4326 slumap_clean_utm.tif slumap_clean.tif
-    completed_proc = subprocess.run(
-        ["singularity",
+    logger.info("Reproject slopeunits raster to fit bathymetri using gdalwarp")
+    # File paths
+    source_raster = os.path.join(slopeunits_dir, "slumap_clean_utm.tif") # Name is set in grassjob.sh
+    output_raster = os.path.join(slopeunits_dir, "slumap.tif")           # Final slopeunits map.
+
+    # Extract information from target raster using rasterio
+    with rasterio.open(bathy) as target:
+        target_crs = target.crs.to_string()  # CRS in Proj4 or EPSG format
+        target_transform = target.transform
+        target_resolution = (target_transform.a, -target_transform.e)  # Pixel size (x_res, y_res)
+        
+        # Calculate bounding box in the target CRS
+        left, bottom, right, top = target.bounds
+
+    # Define the gdalwarp command with extracted parameters
+    gdalwarp_command = [
+        "singularity",
         "exec",
-        singularity_image,
+        "/home/ebr/projects/release-volume-sampler/images/grass.sif",
         "gdalwarp",
-        "-t_srs",
-        "EPSG:4326",
-        "-te ",
-        bathy],
+        "-t_srs", target_crs,                                           # Target CRS
+        "-tr", str(target_resolution[0]), str(target_resolution[1]),    # Target resolution
+        "-te", str(left), str(bottom), str(right), str(top),            # Target extent (bounding box)
+        "-r", "near",                                                   # Resampling method (e.g., bilinear)
+        source_raster,                                                  # Input source raster
+        output_raster                                                   # Output raster
+    ]
+    
+    # Run gdalwarp
+    completed_proc = subprocess.run(
+        gdalwarp_command,
         cwd=slopeunits_dir,
         stdout=subprocess.PIPE
     )
     completed_proc.check_returncode()  # raise CalledProcessError if return code is non-zero.
     log_process(completed_proc, logfile)
-    
-    
-    
+
 
 def log_process(completed_process, log_file):
         with open(log_file, 'a') as log:
@@ -136,17 +156,6 @@ def create_dir(dir_name):
             logger.info(f"Created directory {dir_name}")
         except OSError as e:
             sys.exit(f"Can't create {dir_name}: {e}")
-
-
-def read_tif(fname):
-    "Read .tif data and profile using rasterio."
-    #logger.info(f"Read file: {fname}")
-    with rasterio.open(fname) as src:
-        #data = np.ma.masked_equal(src.read(1), src.nodata)
-        data = src.read(1)
-        msk = np.where(src.read_masks(1) == src.nodata, False, True)
-        profile = src.profile.copy()
-    return data, msk, profile
 
 
 if __name__ == "__main__":

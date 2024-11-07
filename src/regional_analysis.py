@@ -3,7 +3,7 @@ import logging
 import numpy as np
 from datetime import datetime
 from slope_analysis.slope_analysis import SlopeAnalysis
-from preprocess.preprocess import preprocess, slope, aspect
+from preprocess.preprocess import preprocess, slope, aspect, surface_area_ratio, compute_pixel_areas
 from slopeunits.slopeunits import run_grassjob
 from displacements.displacements import displacement
 from utils.utils import create_dir
@@ -76,7 +76,7 @@ def main():
     run_preprocess(bathyfile, soilregions_filename, soil_parameters_filename, singularity_image, rundir, logfile)
     
     #run_slope_analysis:
-    #execute_slope_analysis(rundir)
+    execute_slope_analysis(rundir)
     
     # Preselection of volumes.
     preselect_volumes(rundir, slopeunitsfile)
@@ -89,9 +89,10 @@ def run_preprocess(bathyfile, soilparamsfile, soilregionsfile, singularity_image
     shutil.copy(soilparamsfile, os.path.join(rundir, "soilregions.tif"))
     shutil.copy(soilregionsfile, os.path.join(rundir, "soilparams.json"))
     
-    # calculate_slopes_and_aspect:
-    slope(bathyfile, output_dir=rundir, logfile=logfile)
+    # calculate_slopes_and_aspect and pixel areas
+    slope_file = slope(bathyfile, output_dir=rundir, logfile=logfile)
     aspect(bathyfile, output_dir=rundir, logfile=logfile)
+    compute_pixel_areas(rundir, bathy_file=bathyfile, slope_file=slope_file)
 
 
 def execute_slope_analysis(rundir):

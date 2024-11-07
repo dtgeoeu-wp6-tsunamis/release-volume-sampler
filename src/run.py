@@ -32,15 +32,16 @@ def main():
     """
     # Settings
     project_dir = "/home/ebr/projects/release-volume-sampler"
+    
     # Shakemaps
     shakemaps_filename = os.path.join(project_dir, "input/shakemaps/messina_1908/predicted_data_NN_Messina_1908.json")
     source_parameters_filename = os.path.join(project_dir, "input/shakemaps/messina_1908/source_parameters.csv")
     
     generated = os.path.join(project_dir, "generated")
     scenario = "messina_001"
-    run = "messina_001_20241023_071936"
+    #run = "messina_001_20241023_071936"
     
-    rundir =  os.path.join(generated, run)
+    rundir =  os.path.join(generated, scenario)
     logfile = os.path.join(rundir, "log.txt")
     
     #logFormatter = logging.Formatter("%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s")
@@ -56,13 +57,13 @@ def main():
    
     
     # Parse and aggregate
-    aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename, bathyfile)
+    aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename)
     
     #calculate displacement probabilities
     calculate_displacement_probabilities(rundir)
     
 
-def aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename, bathyfile):
+def aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename):
         
     def shake_value_function(point):
         # Pullback function to extract value from shakemap.
@@ -77,7 +78,7 @@ def aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename, 
         rundir=rundir)
     
     # Interpolate cummulative over computational region and write to files
-    with rasterio.open(bathyfile) as src:
+    with rasterio.open(os.path.join(rundir, "bathy_truncated.tif")) as src:
         bounds = src.bounds
         profile = src.profile.copy()
     

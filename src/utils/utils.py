@@ -4,6 +4,7 @@ import logging
 import rasterio
 import json
 import numpy as np
+from contextlib import contextmanager
 
 logger = logging.getLogger("utils")
 
@@ -79,3 +80,16 @@ def cummulative(samples, xs, weights=None, axis=-1):
     # Using np.average
     cummulative = np.vstack([np.average(samples < x, weights=weights, axis=axis) for x in xs])
     return(np.nan_to_num(cummulative))
+
+
+@contextmanager
+def temporary_working_directory(path):
+    # Save the current working directory
+    original_directory = os.getcwd()
+    try:
+        # Change to the new directory
+        os.chdir(path)
+        yield  # Control goes to the block under the with statement
+    finally:
+        # Return to the original directory
+        os.chdir(original_directory)

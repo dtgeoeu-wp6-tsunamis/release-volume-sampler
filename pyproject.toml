@@ -14,7 +14,13 @@ pandas = "^2.2.2"
 scikit-learn = "^1.5.1"
 matplotlib = "^3.9.2"
 pyproj = "^3.6.1"
+tensorflow = "^2.18.0"
+plotly = "^5.24.1"
+ipython = "^8.29.0"
 
+
+[tool.poetry.group.dev.dependencies]
+nbformat = "^5.10.4"
 
 [build-system]
 requires = ["poetry-core"]

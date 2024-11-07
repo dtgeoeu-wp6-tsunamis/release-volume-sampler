@@ -9,7 +9,7 @@ IMAGE_DIR = /home/ebr/projects/release-volume-sampler/images
 IMAGE_NAME = grass.sif
 DEF_FILE = grass.def
 IMAGE_PATH = $(IMAGE_DIR)/$(IMAGE_NAME)
-SLOPEUNIT_FILE = $(GENERATED_DIR)/slopeunits/slumap_clean.tif
+SLOPEUNIT_FILE = $(GENERATED_DIR)/slopeunits/slumap.tif
 
 
 slopeunits: clean-slopeunits
@@ -33,6 +33,12 @@ plots:
 	
 	@echo " Plot quantiles.."
 	@for folder in $(shell find $(RUNDIR) -type d -name "quantiles"); do \
+		echo "Plot content $$folder"; \
+		poetry run python src/plot.py "$$folder" --logscale; \
+	done
+	
+	@echo " Plot displacements.."
+	@for folder in $(shell find $(RUNDIR) -type d -name "displacements"); do \
 		echo "Plot content $$folder"; \
 		poetry run python src/plot.py "$$folder" --logscale; \
 	done
