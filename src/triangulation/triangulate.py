@@ -10,13 +10,15 @@ from rasterio.transform import rowcol
 from pyproj import Transformer
 import matplotlib.cm as cm
 import os
-
+import meshio
 
 class Triangulation:
     
     def __init__(self):
         """ Class to triangulate topography subject to optimization of triangle shape, 
             approximation of the topography and equally sized triangles.
+            
+            TODO: Several parameters related to the optimization is hardcoded.
         """
         # Load real raster data
         self.output_dir = "/home/ebr/projects/release-volume-sampler/generated/messina_001/triangulation"
@@ -35,18 +37,23 @@ class Triangulation:
         self.rows, self.cols = self.bathy.shape
        
         # Initial Triangulation 
-        self.triang_points, self.triang_point_is_boundary = self.create_points((40, 60))
+        self.triang_points, self.triang_point_is_boundary = self.create_points((100, 130))
         self.tri = Delaunay(self.triang_points)
         self.vertices = tf.Variable(self.triang_points, dtype=tf.float32)  # TensorFlow variable for optimization
         
-        # Filter out triangles only associated with boundary points
-        self.interior_triangles = np.array([t for t in self.tri.simplices if not all (self.triang_point_is_boundary[t])])
-        self.triangles = self.tri.simplices  # Indices of vertices for each triangle
+       
+        #self.triangles = self.tri.simplices  # Indices of vertices for each triangle
+        #self.triangle_is_interior = np.array([not all(self.triang_point_is_boundary[t]) for t in self.triangles])
+        #self.neighbors = self.tri.neighbors
         
         # Points for evaluation of topography.
         all_eval_points, eval_point_is_boundary = self.create_points(dims = (400, 300))
         self.eval_points  = tf.cast(all_eval_points[eval_point_is_boundary == 0], tf.float32) # remove boundary points
         self.true_elevations = tf.cast(self.target_elevation_function(self.eval_points), tf.float32)
+
+
+    def triangle_is_interior(self):
+        return(np.array([not all(self.triang_point_is_boundary[t]) for t in self.tri.simplices]))
 
 
     def target_elevation_function(self, points):
@@ -91,7 +98,7 @@ class Triangulation:
         valid_points = points[simplex_is_valid]
  
         # Gather all vertices for the triangles containing the points
-        tri_indices = self.triangles[simplexes]  # Get the triangle indices for valid points
+        tri_indices = self.tri.simplices[simplexes]  # Get the triangle indices for valid points
         p1, p2, p3 = self.get_3d_vertices(tri_indices)
         
         # Compute the normal vector of the plane for each triangle using the cross product
@@ -119,8 +126,8 @@ class Triangulation:
         vectorized for efficiency.
         """
         # Mask triangles with boundary points only
-        boundary_mask = tf.reduce_all(tf.gather(self.triang_point_is_boundary, self.triangles) == 1, axis=1)
-        non_boundary_triangles = tf.boolean_mask(self.triangles, ~boundary_mask)
+        boundary_mask = tf.reduce_all(tf.gather(self.triang_point_is_boundary, self.tri.simplices) == 1, axis=1)
+        non_boundary_triangles = tf.boolean_mask(self.tri.simplices, ~boundary_mask)
 
         p1, p2, p3 = self.get_3d_vertices(non_boundary_triangles)
         # Gather vertices for each triangle (shape: [num_triangles, 3, 2])
@@ -153,8 +160,10 @@ class Triangulation:
     
     def create_batches(self, batch_size):
         """Create batches from the evaluation points."""
+        epoch=0
         while True:
-            print("All points evaluated....")
+            epoch += 1
+            print(f"Epoch: {epoch}")
             indices = np.random.permutation(len(self.eval_points))  # Shuffle the points
             for i in range(0, len(self.eval_points), batch_size):
                 batch_indices = indices[i:i+batch_size]
@@ -165,12 +174,12 @@ class Triangulation:
         # 4. Optimization Loop
         optimizer = tf.optimizers.Adam(learning_rate=1., beta_1=0.7)
         interior_mask =  tf.cast(1- self.triang_point_is_boundary, dtype=tf.float32)
-        num_iterations = 3000
-        batch_size = 1000  # Set your batch size
+        num_iterations = 2000
+        batch_size = 3000  # Set your batch size
 
-        shape_weight = 1e2 # Recall that this is weighted against average depth residuals.
-        area_weight = 1e-11
-        elevation_weight = 1e-3
+        shape_weight = 5e1 # Recall that this is weighted against average depth residuals.
+        area_weight = 5e-11
+        elevation_weight = 1e-2
 
 
         # Create batches from the evaluation points
@@ -178,6 +187,7 @@ class Triangulation:
 
         for i in range(num_iterations):
             batch_indices = next(batch_generator)  # Get the next batch of points
+            self.tri = Delaunay(self.vertices.numpy())
             with tf.GradientTape() as tape:
                 # Shape term: Penalize triangles with bad aspect ratios 
                 shape_loss, area_loss = self.compute_shape_loss()
@@ -209,16 +219,16 @@ Area loss: {area_weight*area_loss.numpy():.10e}
     def create_points(self, dims=None):
         # Construct pixel indices
         nr_of_rows, nr_of_cols = dims if dims is not None else (self.rows, self.cols)
-        row_indices_triang, col_indices_triang = np.meshgrid(
+        row_indices, col_indices = np.meshgrid(
             np.linspace(0, self.rows-1, num=nr_of_rows, dtype=int), 
             np.linspace(0, self.cols-1, num=nr_of_cols, dtype=int), 
             indexing="ij"
         )
         # Convert pixel indices to UTM coordinates
-        lons, lats = rasterio.transform.xy(self.src.transform, row_indices_triang, col_indices_triang)
+        lons, lats = rasterio.transform.xy(self.src.transform, row_indices, col_indices)
         eastings, northings = self.lonlat_to_meters(np.array(lons), np.array(lats))
         #eastings, northings = np.array(eastings), np.array(northings)
-        mask = self.labeled[row_indices_triang, col_indices_triang] == self.label_component
+        mask = self.labeled[row_indices, col_indices] == self.label_component
 
         # Add extra boundry vertices to ensure that the entire region is contained in triangulation.
         mask_buff = convolve2d(mask, np.ones((3, 3)), mode='same')> 0.
@@ -291,8 +301,8 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         plt.colorbar(sc, ax=ax, label="Elevation (m)")
         
         # Triangulation plot
-        ax.triplot(vertices[:, 0], vertices[:, 1], self.interior_triangles, color='gray', linewidth=0.5)
-        ax.scatter(vertices[:, 0], vertices[:, 1], color="black", s=5, label="Vertices")
+        ax.triplot(vertices[:, 0], vertices[:, 1], self.tri.simplices[self.triangle_is_interior()], color='gray', linewidth=0.5)
+        ax.scatter(vertices[:, 0], vertices[:, 1], color="black", s=2, label="Vertices")
 
         # Title and labels
         ax.set_title("Optimized Triangulation", fontsize=16)
@@ -309,10 +319,55 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         print(f"Plot saved to {output_file}")
 
 
+    def write_to_file(self):
+        """
+        Write triangulation to files.
+        """
+        # Write to mesh.
+        cells = [
+                    ("triangle", self.tri.simplices),
+                ]
+            
+        
+        # Convert meters to lonlat
+        transformer = Transformer.from_crs(f"EPSG:{self.UTM_epsg_code}" ,"EPSG:4326" , always_xy=True)
+        eastings, northings = self.vertices[:,0].numpy(), self.vertices[:,1].numpy()
+        lons, lats = transformer.transform(eastings, northings)
+        elevations = self.target_elevation_function(self.vertices).numpy()
+        
+        mesh = meshio.Mesh(
+                np.vstack([lons, lats, elevations]).T,
+            cells,
+            # Optionally provide extra data on points, cells, etc.
+            point_data={"Elevation": elevations,
+                        "is_boundary": self.triang_point_is_boundary},
+            cell_data={"is_interior": [self.triangle_is_interior().astype(int)],
+                       "neighbours": [self.tri.neighbors]}
+        )
+        mesh.write(
+            os.path.join(self.output_dir, "triangulation.vtk"),  # str, os.PathLike, or buffer/open file
+            # file_format="vtk",  # optional if first argument is a path; inferred from extension
+        )
+
+        # Write to raster:
+        row_indices, col_indices = np.meshgrid(np.arange(self.src.height), np.arange(self.src.width), indexing='ij')
+
+        lons, lats = rasterio.transform.xy(self.src.transform, row_indices, col_indices)
+        lons, lats = np.array(lons), np.array(lats)
+        
+        eastings, northings = self.lonlat_to_meters(lons, lats)
+
+        # Find the triangle containing each point
+        simplexes = self.tri.find_simplex(np.vstack([eastings.flatten(), northings.flatten()]).T)  # Index of triangle containing each point
+        
+        with rasterio.open(os.path.join(self.output_dir, 'triangulation_raster.tif'),'w', **self.src.profile) as dst:
+            dst.write(simplexes.reshape((self.src.height, self.src.width)), 1)
+
 def main():
     triang = Triangulation()
     triang.fit()
     triang.plot_triangulation()
+    triang.write_to_file()
 
 if __name__ == "__main__":
     main()
