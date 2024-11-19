@@ -2,17 +2,20 @@ import os, sys
 import logging
 import numpy as np
 from datetime import datetime
-from slope_analysis.slope_analysis import SlopeAnalysis
-from preprocess.preprocess import preprocess, slope, aspect, surface_area_ratio, compute_pixel_areas
-from slopeunits.slopeunits import run_grassjob
-from displacements.displacements import displacement
-from utils.utils import create_dir
 from collections import namedtuple
 import shutil
 import json
 
-logging.basicConfig(level = logging.INFO)
-logger = logging.getLogger()
+# Import from modules.
+from src.preprocess.preprocess import preprocess, slope, aspect, surface_area_ratio, compute_pixel_areas
+from src.slopeunits.slopeunits import run_grassjob
+from src.slope_analysis.slope_analysis import SlopeAnalysis
+from src.triangulation.triangulate import Triangulation
+from src.triangulation.cumprobs_by_triangle import caclulate_cummulative_logfos_probabilities
+from src.volume_sampler.release_volume_sampler import RecursiveReleaseAnalysis
+
+from src.displacements.displacements import displacement
+from src.utils.utils import create_dir, setup_logger
 
 
 def main():
@@ -45,45 +48,34 @@ def main():
     
     #map_projection_epsg = 3065 # EPSG code of the mapprojection applied for computations. Must have units metre! 6709
     singularity_image = os.path.join(project_dir, "images/grass.sif")
-    
     generated = os.path.join(project_dir, "generated")
-    slopeunitsfile = os.path.join(generated, "slopeunits/slumap_clean.tif")
-    scenario = "messina_001"
-    #run = None #"messina_001_20241023_071936"
     
-    #if run is None:
-        # Create time stamped rundir
-    #    formatted_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
-    #    run = f"{scenario}_{formatted_datetime}"
+    #slopeunitsfile = os.path.join(generated, "slopeunits/slumap_clean.tif")
+    scenario = "messina_001"
     
     rundir =  os.path.join(generated, scenario)
     logfile = os.path.join(rundir, "log.txt")
-    create_dir(rundir)    
-    
-    #logFormatter = logging.Formatter("%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s")
-    logFormatter = logging.Formatter("'%(levelname)s:%(message)s'")
-
-    fileHandler = logging.FileHandler(os.path.join(rundir, "run.log"))
-    fileHandler.setFormatter(logFormatter)
-    logger.addHandler(fileHandler)
-
-    #consoleHandler = logging.StreamHandler()
-    #consoleHandler.setFormatter(logFormatter)
-    #logger.addHandler(consoleHandler)
-   
+    logger = setup_logger("preprocess", rundir)
+    create_dir(rundir, logger)    
     
     # preprocess_bathy:
-    run_preprocess(bathyfile, soilregions_filename, soil_parameters_filename, singularity_image, rundir, logfile)
+    run_preprocess(bathyfile, soilregions_filename, soil_parameters_filename, singularity_image, rundir, logfile, logger)
     
     #run_slope_analysis:
     execute_slope_analysis(rundir)
     
+    # make triangulation.
+    triangulate_domain(rundir)
+    
+    # Run volume sampler
+    sample_release_volumes(rundir) 
+    
     # Preselection of volumes.
-    preselect_volumes(rundir, slopeunitsfile)
+    # preselect_volumes(rundir, slopeunitsfile)
     
 
-def run_preprocess(bathyfile, soilparamsfile, soilregionsfile, singularity_image, rundir, logfile):
-    bathyfile = preprocess(bathyfile, singularity_image, map_projection_epsg=None, output_dir=rundir, logfile=logfile)
+def run_preprocess(bathyfile, soilparamsfile, soilregionsfile, singularity_image, rundir, logfile, logger):
+    bathyfile = preprocess(bathyfile, singularity_image, logger=logger, map_projection_epsg=None, output_dir=rundir, logfile=logfile)
     
     # Copy soilparameterfiles to rundir
     shutil.copy(soilparamsfile, os.path.join(rundir, "soilregions.tif"))
@@ -92,7 +84,7 @@ def run_preprocess(bathyfile, soilparamsfile, soilregionsfile, singularity_image
     # calculate_slopes_and_aspect and pixel areas
     slope_file = slope(bathyfile, output_dir=rundir, logfile=logfile)
     aspect(bathyfile, output_dir=rundir, logfile=logfile)
-    compute_pixel_areas(rundir, bathy_file=bathyfile, slope_file=slope_file)
+    compute_pixel_areas(rundir, bathy_file=bathyfile, slope_file=slope_file, logger=logger)
 
 
 def execute_slope_analysis(rundir):
@@ -118,14 +110,58 @@ def execute_slope_analysis(rundir):
     quantiles = [0.01, 0.1, 0.5, 0.9, 0.99]
     sa.compute_quantiles(quantiles, write_fos=True, write_ky=True)
     
-    fos_thresholds = np.linspace(0, 2, num=20)
+    fos_thresholds = np.linspace(0, 2, num=40)
     sa.compute_cummulative(fos_thresholds, feature_name="logfos", write=True)
     
-    ky_thresholds = np.linspace(-3,1, num=20)
+    ky_thresholds = np.linspace(-3,1, num=40)
     sa.compute_cummulative(ky_thresholds, feature_name="logky", write=True)
 
 
+def triangulate_domain(rundir):
+    config = {
+        "rundir": rundir,
+        "bathyfile": "bathy_truncated.tif",
+        "utm_epsg_code": 32633, #Messina strait
+        "resolution": (200, 200)
+    }
+    optimization_params = {
+        "num_iterations": 2000,
+        "batch_size": 3000,
+        "shape_weight": 5e1,
+        "area_weight": 5e-11,
+        "elevation_weight": 1e-2
+    }
+    triang = Triangulation(**config)
+    triang.fit(**optimization_params)
+    triang.plot_triangulation()
+    triang.write_to_file()
+    
+    # Calculate cumulative probabilities lookup table by triangle
+    caclulate_cummulative_logfos_probabilities(rundir)
+
+
+def sample_release_volumes(rundir):
+    
+    config = {
+        "rundir": rundir,
+        "mesh_path": os.path.join(rundir, "triangulation", "triangulation.vtk"),
+        "cumprob_logfos_path": os.path.join(rundir, "triangulation", "cummulative_fos.npz"),
+        "utm_epsg_code": 32633, # Messina strait
+    }
+    
+    run_config = {
+        "fos_threshold": 1.1,
+        "recursive_probability_threshold": 0.01,
+        "seed_triangle_probability_threshold": 0.1,
+    }
+    # Execute analysis.
+    analysis = RecursiveReleaseAnalysis(**config)
+    analysis.run(**run_config)
+
+
 def preselect_volumes(rundir, slopeunitsfile):
+    """ Not used in updated workflow.
+    """
     volume_selection_dir = os.path.join(os.path.join(rundir, "volume_selection"))
     create_dir(volume_selection_dir)
     

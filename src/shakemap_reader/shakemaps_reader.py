@@ -1,15 +1,11 @@
 import numpy as np
 import os
-import logging
 import json
 from scipy.interpolate import RegularGridInterpolator
 import csv
 from rasterio import CRS, Affine
 
-from utils.utils import create_dir, read_tif, write_tif, cummulative, write_content
-
-logging.basicConfig(level = logging.INFO)
-logger = logging.getLogger('shakemaps_reader')
+from src.utils.utils import create_dir, read_tif, write_tif, cummulative, write_content, setup_logger
 
 
 class ShakemapsAggregator:
@@ -21,6 +17,7 @@ class ShakemapsAggregator:
         self.source_parameters_filename = source_parameters_filename
         self.thresholds = thresholds
         self.shakemaps_out_dir = os.path.join(rundir, "shakemaps")
+        self.logger = setup_logger("shakemaps_aggregator", self.shakemaps_out_dir)
         self.shake_value = shake_value
          
         # Load source parameters
@@ -56,7 +53,7 @@ class ShakemapsAggregator:
                 "scale":"log10",
                 "unit":"g"
             })
-            write_tif(os.path.join(self.shakemaps_out_dir, filename), logpga, profile)
+            write_tif(os.path.join(self.shakemaps_out_dir, filename), logpga, profile, self.logger)
         write_content(shakemap_content, self.shakemaps_out_dir)
     
     
@@ -80,6 +77,7 @@ class ShakemapsAggregator:
     
     def interpolate_shakemap(self, shakemaps, shake_value, shake_sample, bbox, n_rows, n_cols, interpolation_method):
         # Create grid interpolator
+        self.logger.info(f"Interpolating shakemap - sample:{shake_sample}, value: {shake_value}, method: {interpolation_method}")
         lon_shake, lat_shake, data = zip(*[(point['lon'], point['lat'], point[shake_value][shake_sample]) for point in shakemaps])
         grid_shake = np.array(list(set(lon_shake))), np.array(list(set(lat_shake))) # Extract unique values 
         [g.sort() for g in grid_shake] # in ascending order.

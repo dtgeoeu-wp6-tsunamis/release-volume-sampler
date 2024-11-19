@@ -6,7 +6,7 @@ import numpy as np
 import json
 import argparse
 import logging
-from utils.utils import read_tif, create_dir
+from src.utils.utils import read_tif, create_dir
 
 logging.basicConfig(level = logging.INFO)
 logger = logging.getLogger('plot')

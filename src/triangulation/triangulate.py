@@ -1,27 +1,26 @@
 import tensorflow as tf
-import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import Delaunay
 import rasterio
 from scipy.signal import convolve2d
-from scipy.ndimage import label
 import numpy as np
 from rasterio.transform import rowcol
 from pyproj import Transformer
 import matplotlib.cm as cm
 import os
 import meshio
-import logging
-
-
-logging.basicConfig(level = logging.INFO)
-logger = logging.getLogger("triangulate")
+from src.utils.utils import create_dir, setup_logger
 
 def main():
+    """ To ensure that modules are imports works, run the script as a module.
+    
+    release-volume-sampler$ python -m src.triangulation.triangulate
+    """
     config = {
-        "output_dir": "/home/ebr/projects/release-volume-sampler/generated/messina_001/triangulation",
-        "bathyfile": "/home/ebr/projects/release-volume-sampler/input/bathy/messina_001/bathy_truncated.tif",
+        "rundir": "/home/ebr/projects/release-volume-sampler/generated/messina_001",
+        "bathyfile": "bathy_truncated.tif",
         "utm_epsg_code": 32633, #Messina strait
+        "resolution": (100, 130)
     }
     optimization_params = {
         "num_iterations": 2000,
@@ -39,7 +38,7 @@ def main():
 
 class Triangulation:
     
-    def __init__(self, output_dir, bathyfile, utm_epsg_code):
+    def __init__(self, rundir, bathyfile, utm_epsg_code, resolution):
         """ Class to triangulate topography subject to optimization of triangle shape, 
             approximation of the topography and equally sized triangles.
             
@@ -47,25 +46,26 @@ class Triangulation:
             output_dir (str): Path to output directrory.
             bathyfile (str): Path to bathymetry file in geographic coordinates (longitude-latitude).
             utm_epsg_code (int): EPSG code for the projection applied to compute areas and distances.
+            resolution (Tuple[int, int]): Grid dimension for the vertices in the initial triangulation.
         """
         # Load real raster data
-        self.output_dir = output_dir
-        self.bathyfile = bathyfile
+        self.output_dir = os.path.join(rundir, "triangulation")
+        create_dir(self.output_dir)
+        self.logger = setup_logger("triangulation", self.output_dir)
+        
+        self.bathyfile = os.path.join(rundir, bathyfile)
         self.src = rasterio.open(self.bathyfile)
         self.bathy = self.src.read(1)
         self.bathy_msk = np.where(self.src.read_masks(1) == self.src.nodata, False, True)
         self.profile = self.src.profile.copy()
         self.UTM_epsg_code = utm_epsg_code
-        
-        # Partition bathy into connected components and select.
-        #self.labeled, num_features = label(self.bathy_msk)
-        #self.label_component = num_features if label_component is None else label_component
+        self.resolution = resolution
         
         # Get the shape of the data (number of rows and columns)
         self.rows, self.cols = self.bathy.shape
        
         # Initial Triangulation 
-        self.triang_points, self.triang_point_is_boundary = self.create_points((100, 130))
+        self.triang_points, self.triang_point_is_boundary = self.create_points(self.resolution)
         self.tri = Delaunay(self.triang_points)
         self.vertices = tf.Variable(self.triang_points, dtype=tf.float32)  # TensorFlow variable for optimization
         
@@ -186,7 +186,7 @@ class Triangulation:
         epoch=0
         while True:
             epoch += 1
-            logger.info(f"Epoch: {epoch}")
+            self.logger.info(f"Epoch: {epoch}")
             indices = np.random.permutation(len(self.eval_points))  # Shuffle the points
             for i in range(0, len(self.eval_points), batch_size):
                 batch_indices = indices[i:i+batch_size]
@@ -229,7 +229,7 @@ Elevation loss {elevation_weight*elevation_loss.numpy():.10e}
 Shape loss: {shape_weight*shape_loss.numpy():.10e}
 Area loss: {area_weight*area_loss.numpy():.10e}
 """
-                logger.info(print_str)
+                self.logger.info(print_str)
     
     
     def create_points(self, dims=None):
@@ -316,7 +316,7 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         # Save to file
         plt.savefig(os.path.join(self.output_dir, output_file), dpi=300, bbox_inches="tight")
         plt.close(fig)  # Close figure after saving to avoid display if running in a notebook
-        logger.info(f"Plot saved to {output_file}")
+        self.logger.info(f"Plot saved to {output_file}")
 
 
     def write_to_file(self, vtkfile="triangulation.vtk", rasterfile='triangulation.tif'):
@@ -344,7 +344,7 @@ Area loss: {area_weight*area_loss.numpy():.10e}
                        "neighbours": [self.tri.neighbors]}
         )
         vtkfile_out = os.path.join(self.output_dir, vtkfile)
-        logger.info(f"Writes triangulation to: {vtkfile_out}")
+        self.logger.info(f"Writes triangulation to: {vtkfile_out}")
         mesh.write(
             vtkfile_out,  # str, os.PathLike, or buffer/open file
             # file_format="vtk",  # optional if first argument is a path; inferred from extension
@@ -362,7 +362,7 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         simplexes = self.tri.find_simplex(np.vstack([eastings.flatten(), northings.flatten()]).T)  # Index of triangle containing each point
         
         rasterfile_out = os.path.join(self.output_dir, rasterfile)
-        logger.info(f"Writes triangulation to: {rasterfile_out}")
+        self.logger.info(f"Writes triangulation to: {rasterfile_out}")
         with rasterio.open(rasterfile_out,'w', **self.src.profile) as dst:
             dst.write(simplexes.reshape((self.src.height, self.src.width)), 1)
 

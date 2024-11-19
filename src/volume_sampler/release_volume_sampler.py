@@ -1,30 +1,35 @@
 import meshio
 import numpy as np
 from pyproj import Transformer
-import rasterio
-import matplotlib.pyplot as plt
 import os
 import logging
 import json
-
 from itertools import product
-logging.basicConfig(level = logging.INFO)
-logger = logging.getLogger("release volume sampler")
+
+from src.utils.utils import setup_logger, create_dir
 
 
 def main():
+    """ To ensure that modules are imports works, run the script as a module.
+    
+    release-volume-sampler$ python -m src/volume_sampler.release_volume_sampler
+    """
     # Usage example
     config = {
+        "rundir": "/home/ebr/projects/release-volume-sampler/generated/messina_001",
         "mesh_path": "/home/ebr/projects/release-volume-sampler/generated/messina_001/triangulation/triangulation.vtk",
         "cumprob_logfos_path": "/home/ebr/projects/release-volume-sampler/generated/messina_001/triangulation/cummulative_fos.npz",
-        "output_dir": "/home/ebr/projects/release-volume-sampler/generated/messina_001/triangulation/volumes",
         "utm_epsg_code": 32633, # Messina strait
+    }
+    
+    run_config = {
         "fos_threshold": 1.1,
         "recursive_probability_threshold": 0.01,
         "seed_triangle_probability_threshold": 0.1,
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)
+    analysis.run(**run_config)
 
 
 class RecursiveReleaseAnalysis:
@@ -57,15 +62,16 @@ class RecursiveReleaseAnalysis:
             A triangle is considered a seed if P(FOS < fos_threshold) exceeds this value.
     
     """
-    def __init__(self, mesh_path, cumprob_logfos_path, utm_epsg_code, fos_threshold, output_dir, recursive_probability_threshold, seed_triangle_probability_threshold):
+    def __init__(self, rundir, mesh_path, cumprob_logfos_path, utm_epsg_code):
+        self.output_dir = os.path.join(rundir, "volumes")
+        create_dir(self.output_dir)
+        self.logger = setup_logger("volume_sampler", self.output_dir)
+        
         self.utm_epsg_code = utm_epsg_code             # Projection used for calculation of areas and sides of triangles.
         self.cumprob_logfos_path = cumprob_logfos_path # Path to lookuptable for cumprob of logfos.
-        self.fos_threshold = fos_threshold             # To assign probability of released upstream triangles.
-        self.output_dir = output_dir
-        Release.recursive_probability_threshold = recursive_probability_threshold # Recursive propagation truncated if probabiliy is below.
-        self.seed_triangle_probability_threshold = seed_triangle_probability_threshold # Filtration of seed triangles: P(fos < fos_threshold) > threshold
         
-        logger.info(f"Load mesh: {mesh_path}")
+        
+        self.logger.info(f"Load mesh: {mesh_path}")
         self.mesh = meshio.read(mesh_path)
         self.elevation = self.mesh.point_data["Elevation"]
         self.neighbours = self.mesh.cell_data["neighbours"][0]
@@ -73,25 +79,22 @@ class RecursiveReleaseAnalysis:
         self.triangles = self.mesh.cells_dict["triangle"]
         self.n_triangles = self.triangles.shape[0]
         
-        logger.info("Calculate vertice locations (easting, northing) using projection EPSG:{self.utm_epsg_code}.")
+        self.logger.info("Calculate vertice locations (easting, northing) using projection EPSG:{self.utm_epsg_code}.")
         self.transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{self.utm_epsg_code}", always_xy=True)
         self.easting, self.northing = self.transformer.transform(
             self.mesh.points[:, 0], self.mesh.points[:, 1]
         )
         
-        logger.info(" Calculating triangle normals, sides and areas.") # Has to be executed in correct order.
+        self.logger.info(" Calculating triangle normals, sides and areas.") # Has to be executed in correct order.
         self.normals, self.sides, self.areas = self._compute_triangle_normals_and_sides()
-        logger.info(" Compute boundary normals and gradients.") 
+        self.logger.info(" Compute boundary normals and gradients.") 
         self.side_normals = self._compute_side_normals()
         self.grads = self.calculate_boundary_gradients()
         
         # Load lookuptable
-        logger.info(f"Load cumulative probabilities: {self.cumprob_logfos_path}.")
+        self.logger.info(f"Load cumulative probabilities: {self.cumprob_logfos_path}.")
         cumprob_logfos_npz = np.load(self.cumprob_logfos_path)
         self.cumprob_thresholds, self.cumprob_logfos = cumprob_logfos_npz["thresholds"], cumprob_logfos_npz["cummulative_probs"]
-        
-        # Run analysis
-        self.run()
 
 
     def _compute_triangle_normals_and_sides(self):
@@ -145,13 +148,13 @@ class RecursiveReleaseAnalysis:
         return np.sum(self.normals[:, :-1] * self.side_normals, axis=2).T
 
 
-    def probability_of_release(self, triangles, released_volume):
+    def probability_of_release(self, triangles, released_volume, fos_threshold):
         # Determine if a triangle will be released based on its FOS and its neighbors
         probs = []
         for triangle in triangles:
             neighbors_in_release = [t in released_volume for t in self.neighbours[triangle]]
             delta = self.sides[triangle][neighbors_in_release].sum() / self.sides[triangle].sum()
-            probability_of_release = self.get_cummulative_logfos(triangle, np.log10(self.fos_threshold) - np.log10(1-delta))
+            probability_of_release = self.get_cummulative_logfos(triangle, np.log10(fos_threshold) - np.log10(1-delta))
             probs.append(probability_of_release)
             #probs.append(self.triangle_fos[triangle] < self.fos_threshold/(1 - delta))
         return np.array(probs)
@@ -169,14 +172,18 @@ class RecursiveReleaseAnalysis:
         return upstream_triangles[released_is_downstream & released_is_interior].astype(int)
 
    
-    def run(self):
-        #seed_triangles, seed_probabilities = self.find_seed_triangles()
-        # Identify triangles below release threshold
+    def run(self, seed_triangle_probability_threshold, fos_threshold, recursive_probability_threshold):
+       
+        # Asssign class variables to Release. 
+        Release.fos_threshold = fos_threshold             # To assign probability of released upstream triangles.
+        Release.recursive_probability_threshold = recursive_probability_threshold # Recursive propagation truncated if probabiliy is below.
+        Release.logger = self.logger
+        
+        # Filtration of seed triangles: P(fos < fos_threshold) > threshold
         all_triangles = np.arange(self.n_triangles-1)
-        seed_probability = np.array([self.get_cummulative_logfos(triangle, np.log10(self.fos_threshold)) for triangle in all_triangles])
-        seed_triangles = all_triangles[np.logical_and(seed_probability > self.seed_triangle_probability_threshold, seed_probability != 9999.0)]
-        logger.info(f"Found {len(seed_triangles)} seed triangles.")
-        #seed_triangle = seed_triangles[3]
+        seed_probability = np.array([self.get_cummulative_logfos(triangle, np.log10(Release.fos_threshold)) for triangle in all_triangles])
+        seed_triangles = all_triangles[np.logical_and(seed_probability > seed_triangle_probability_threshold, seed_probability != 9999.0)]
+        self.logger.info(f"Found {len(seed_triangles)} seed triangles.")
         
         recursive_propagations = []
         for seed_triangle in seed_triangles:
@@ -220,6 +227,8 @@ class Release():
     
     """
     recursive_probability_threshold = None # Stop recursion if probability of release is smaller.
+    fos_threshold = None
+    logger = None
     
     def __init__(self, triangulation, released, released_at_step, probability, step):
         self.triangulation = triangulation
@@ -239,7 +248,7 @@ class Release():
             
             if len(upstream_triangles) > 0:
                 upstream_triangles = np.array(list(upstream_triangles))
-                indep_prob = self.triangulation.probability_of_release(upstream_triangles, self.released) # Independent release probabilities
+                indep_prob = self.triangulation.probability_of_release(upstream_triangles, self.released, self.fos_threshold) # Independent release probabilities
                 for sub in self._subsets(upstream_triangles): 
                     new_release = upstream_triangles[sub]
                     probability_of_new_release = np.concat([(1-indep_prob)[~sub], indep_prob[sub]]).prod()
@@ -269,7 +278,7 @@ class Release():
                 "steps": self.released_at_step,
             }
             volumes.append(new_volume)
-            logger.info(f"Terminated release. Released: {self.released}, Probability: {self.probability}, Steps: {self.released_at_step}")
+            self.logger.info(f"Terminated release. Released: {self.released}, Probability: {self.probability}, Steps: {self.released_at_step}")
         else:
             for children in self.children:
                 children.write_release(volumes)

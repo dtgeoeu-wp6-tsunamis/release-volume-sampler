@@ -16,31 +16,31 @@ slopeunits: clean-slopeunits
 	@echo " Calculating slopeunits..."
 	poetry run python src/slopeunits/slopeunits.py $(GENERATED_DIR) $(IMAGE_PATH) $(PROJECTED_BATHY)
 
-analysis: $(SLOPEUNIT_FILE) 
+analysis:
 	@echo " Run regional slope analysis and extract preselection of volumes..."
-	poetry run python src/regional_analysis.py
+	poetry run python -m src.regional_analysis
 
-run: analysis
-	@echo " Run workflow from main.py..."
-	poetry run python src/run.py
+run:
+	@echo " Run workflow from run.py..."
+	poetry run python -m src.run
 
 plots:
 	@echo " Plot cummulatives.."
 	@for folder in $(shell find $(RUNDIR) -type d -name "cummulative"); do \
 		echo "Plot content $$folder"; \
-		poetry run python src/plot.py "$$folder" --logscale; \
+		poetry run python -m src.plot "$$folder" --logscale; \
 	done
 	
 	@echo " Plot quantiles.."
 	@for folder in $(shell find $(RUNDIR) -type d -name "quantiles"); do \
 		echo "Plot content $$folder"; \
-		poetry run python src/plot.py "$$folder" --logscale; \
+		poetry run python -m src.plot "$$folder" --logscale; \
 	done
 	
 	@echo " Plot displacements.."
 	@for folder in $(shell find $(RUNDIR) -type d -name "displacements"); do \
 		echo "Plot content $$folder"; \
-		poetry run python src/plot.py "$$folder" --logscale; \
+		poetry run python -m src.plot "$$folder" --logscale; \
 	done
 
 clean-slopeunits:

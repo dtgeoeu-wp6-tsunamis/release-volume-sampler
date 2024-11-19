@@ -1,18 +1,12 @@
-import os, sys
+import os
 import subprocess
-import logging
-from datetime import datetime
-from utils.utils import read_tif, write_tif, temporary_working_directory
 import numpy as np
 import rasterio
 import shutil
-from utils.utils import log_process
+
+from src.utils.utils import read_tif, write_tif, temporary_working_directory, log_process, setup_logger
 
 MAX_PROCS_PER_DEM = 8
-
-logging.basicConfig(level = logging.DEBUG)
-logger = logging.getLogger("preprocess")
-
 
 def truncate_positive_values(working_dir, singularity_image, infile, logfile):
     """
@@ -165,11 +159,11 @@ def project_bathy(working_dir, infile, singularity_image, map_projection_epsg, l
     return(outfile)
 
 
-def compute_pixel_areas(working_dir, bathy_file, slope_file):
+def compute_pixel_areas(working_dir, bathy_file, slope_file, logger):
     with temporary_working_directory(working_dir) :
         logger.info("Computing pixel area.")
         output_file = "pixel_areas.tif"
-        slope, _, _ = read_tif(slope_file)
+        slope, _, _ = read_tif(slope_file, logger)
 
         R = 6378137  # Earth's radius in meters for WGS84
         
@@ -195,11 +189,11 @@ def compute_pixel_areas(working_dir, bathy_file, slope_file):
 
             # Calculate pixel area in square meters for each row and scale according to slope and write to file.
             pixel_areas = pixel_width_m * pixel_height_m * area_scale_factor
-            write_tif(output_file, pixel_areas, src.profile)
+            write_tif(output_file, pixel_areas, src.profile, logger)
         return(output_file)
 
 
-def preprocess(bathymetry, singularity_image, output_dir, logfile, map_projection_epsg=None, working_dir=None):
+def preprocess(bathymetry, singularity_image, output_dir, logfile, logger, map_projection_epsg=None, working_dir=None):
     """
     Preprocessing steps before running calculations.
     """

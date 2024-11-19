@@ -3,22 +3,18 @@ import os
 import logging
 import json
 
-from utils.utils import read_tif, write_tif, create_dir, cummulative
-
-
-logger = logging.getLogger('slope_analysis')
-logging.basicConfig(level = logging.INFO)
+from src.utils.utils import read_tif, write_tif, create_dir, cummulative, setup_logger
 
 
 class SlopeAnalysis:
     
-    def __init__(self, working_dir, regionfile="soilregions.tif", soilparamsfile="soilparams.json", slopefile="slope.tif"):
+    def __init__(self, rundir, regionfile="soilregions.tif", soilparamsfile="soilparams.json", slopefile="slope.tif"):
         """
         Run infinite slope analysis with uncertain input parameters. 
         
         Parameters:
         
-        working_dir: str
+        rundir: str
             Path to working directory.
         soilregionsfile: str
             Name of regionsfile contained in wrking_dir. Partition of the region into units with different soilparameters. 
@@ -45,27 +41,32 @@ class SlopeAnalysis:
                     }
                 }
         slopefile: str
-            name of raster with calculated slopes. Has to be located in working_directory. Defaults to slope.tif.
+            name of raster with calculated slopes. Has to be located in rundirectory. Defaults to slope.tif.
         """
-        self.working_dir = working_dir
+        self.out_dir = os.path.join(rundir, "slope_analysis")
+        create_dir(self.out_dir)
+        self.logger = setup_logger("slopeanalysis", self.out_dir)
         #self.physical_parameters = physical_parameters
         self.slopefile = slopefile
         self.regionfile = regionfile
         self.soilparamsfile = soilparamsfile
         
         # Subdirectory names for output
-        self.fos_dir = os.path.join(working_dir, "fos")
-        self.yield_acceleration_dir = os.path.join(working_dir, "yield_acceleration")
+        self.fos_dir = os.path.join(self.out_dir, "fos")
+        self.yield_acceleration_dir = os.path.join(self.out_dir, "yield_acceleration")
         
         # Load data
-        self.slope_data, self.slope_msk, self.slope_profile = read_tif(os.path.join(working_dir, slopefile))
+        self.slope_data, self.slope_msk, self.slope_profile = read_tif(os.path.join(rundir, slopefile), self.logger)
         
         # load soil parameters file.
-        with open(os.path.join(working_dir, self.soilparamsfile),'r') as f:
-             self.soilparameters = json.load(f)
+        soilparameter_file_path = os.path.join(rundir, self.soilparamsfile)
+        with open(soilparameter_file_path,'r') as f:
+            self.logger.info(f"Loads soilparameters file: {soilparameter_file_path}")
+            self.soilparameters = json.load(f)
         
         # load regionfile
-        self.regions,_,_ = read_tif(os.path.join(working_dir, self.regionfile))
+        regionfile_path = os.path.join(rundir, self.regionfile)
+        self.regions,_,_ = read_tif(regionfile_path, self.logger)
         
         self.slopes = []
         self.foss = []
@@ -75,28 +76,28 @@ class SlopeAnalysis:
         
         # Create event tree, one for each region
         for region, physical_parameters in enumerate(self.soilparameters):
-            logger.info(f"Calculating fos and yield acceleration tables for region {region}")
-            logger.info(f"parameters: {physical_parameters}")
+            self.logger.info(f"Calculating fos and yield acceleration tables for region {region}")
+            self.logger.info(f"parameters: {physical_parameters}")
             root_node = Node(weight=1, distributions=physical_parameters["distributions"], params=physical_parameters["constants"], parent=None)
             region_mask = np.logical_and(np.where(self.regions == region, True, False), self.slope_msk)
             
             
             # Traverse leaf nodes and create linear interpolations for slope variation.
             slopes = np.linspace(np.nanmin(self.slope_data[region_mask]), np.nanmax(self.slope_data[region_mask]), num=100)
-            logger.info(f"Slope range for lookuptable (region {region}), {np.min(slopes)}, {np.max(slopes)}")
+            self.logger.info(f"Slope range for lookuptable (region {region}), {np.min(slopes)}, {np.max(slopes)}")
             kys, weights, foss = [], [], []
             sum_of_weights = 0.
-            logger.info(f"sum_of_weights: {sum_of_weights}")
+            self.logger.info(f"sum_of_weights: {sum_of_weights}")
             
             for count, node in enumerate(root_node.leaf_nodes):
-                logger.info(f"Leaf node:{count} \n Weight:{node.weight} \n Params:{node.params} \n")
+                self.logger.info(f"Leaf node:{count} \n Weight:{node.weight} \n Params:{node.params} \n")
                 fos, ky = self.infinite_slope_analysis(slopes, **node.params)
                 foss.append(fos)
                 kys.append(ky)
                 weights.append(node.weight)
                 sum_of_weights += node.weight
             
-            logger.info(f"Sum of weights: {sum_of_weights}")
+            self.logger.info(f"Sum of weights: {sum_of_weights}")
             self.slopes.append(slopes)
             self.foss.append(np.stack(foss))
             self.kys.append(np.stack(kys))
@@ -107,7 +108,7 @@ class SlopeAnalysis:
     def compute_quantiles(self, quantiles, write_fos=False, write_ky=False):
         """
         Compute quantiles of the factor of safety and the yield acceleration.
-        Output is written to the subdirectory [working_dir]/slope_analysis.
+        Output is written to the subdirectory [rundir]/slope_analysis.
         
         Parameters:
         
@@ -144,7 +145,7 @@ class SlopeAnalysis:
                 fos_quantile_raster[~self.slope_msk] = np.nan
                 for region,_ in enumerate(self.soilparameters):
                     fos_quantile_raster[self.region_masks[region]] =np.interp(self.slope_data[self.region_masks[region]], self.slopes[region], fos_quantiles[region][i,:])
-                write_tif(fname = os.path.join(fos_quantile_dir, fos_quantiles_filename), data = fos_quantile_raster, profile = self.slope_profile)
+                write_tif(fname = os.path.join(fos_quantile_dir, fos_quantiles_filename), data = fos_quantile_raster, profile = self.slope_profile, logger=self.logger)
                 fos_output.append({"file": fos_quantiles_filename, "quantile": quantile, "value": "log factor_of_safety", "scale": "log10", "unit":""})
         
             if write_ky: 
@@ -152,7 +153,7 @@ class SlopeAnalysis:
                 ky_quantile_raster[~self.slope_msk] = np.nan                
                 for region,_ in enumerate(self.soilparameters):
                     ky_quantile_raster[self.region_masks[region]] = np.interp(self.slope_data[self.region_masks[region]], self.slopes[region], ky_quantiles[region][i,:])
-                write_tif(fname = os.path.join(ky_quantile_dir, ky_quantiles_filename), data = ky_quantile_raster, profile = self.slope_profile)
+                write_tif(fname = os.path.join(ky_quantile_dir, ky_quantiles_filename), data = ky_quantile_raster, profile = self.slope_profile, logger=self.logger)
                 ky_output.append({"file": ky_quantiles_filename, "quantile": quantile, "value": "log yield_acceleration", "scale":"log10", "unit": "g"})
         
         if write_fos: self.write_content(fos_output, fos_quantile_dir)
@@ -173,9 +174,9 @@ class SlopeAnalysis:
         
         if write:
             output = []
-            create_dir(dir) # dir
+            create_dir(dir, self.logger) # dir
             cum_dir = os.path.join(dir, "cummulative")
-            create_dir(cum_dir)
+            create_dir(cum_dir, self.logger)
         
             # Evaluate cummulative by interpolation and write to files.
             for i, threshold in enumerate(thresholds):
@@ -184,7 +185,7 @@ class SlopeAnalysis:
                 cummulative_raster[~self.slope_msk] = np.nan
                 for region,_ in enumerate(self.soilparameters):
                     cummulative_raster[self.region_masks[region]] = np.interp(self.slope_data[self.region_masks[region]], self.slopes[region], feature_cummulative[region][i,:])
-                write_tif(fname = os.path.join(cum_dir, cummulative_filename), data = cummulative_raster, profile = self.slope_profile)
+                write_tif(fname = os.path.join(cum_dir, cummulative_filename), data = cummulative_raster, profile = self.slope_profile, logger=self.logger)
                 output.append({"file": cummulative_filename, "threshold":threshold, "value": f"cummulative of {feature_name}", "scale": "", "unit": ""})
             
             self.write_content(output, cum_dir)
@@ -254,7 +255,6 @@ class SlopeAnalysis:
         fos, ky: (ndarray, ndarray)
             Base 10 logarithm of the factor of safety and the yield acelleration.
         """
-        logger.info("Calculating Factor Of Safety.")
         
         gamma = (density - density_of_water)/density
         c = cohesion*1000. #in Pa

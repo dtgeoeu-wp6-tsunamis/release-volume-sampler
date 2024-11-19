@@ -3,14 +3,10 @@ import os
 import logging
 import json
 
-from utils.utils import create_dir, read_tif, write_tif, write_content
+from src.utils.utils import create_dir, read_tif, write_tif, write_content, setup_logger
 
 """ Cacluation of displacements probabilities from yield acceleration and shakemaps.
 """
-
-#logging.basicConfig(level = logging.INFO)
-logger = logging.getLogger('displacements')
-
 
 def displacement(logky, logpga, M=None, logpgv=None, model="scalar"):
     """ Calculation of ground displacements
@@ -59,19 +55,22 @@ class DisplacementProbabilityAggregator:
         self.rundir = rundir
         self.displacement_thresholds = displacement_thresholds
         
-        self.ky_dir = os.path.join(rundir, "yield_acceleration/cummulative")
+        self.ky_dir = os.path.join(rundir, "slope_analysis", "yield_acceleration", "cummulative")
         self.pga_dir = os.path.join(rundir, "shakemaps")
         self.magnitude = magnitude # Used for calculation of displacement. Ideally be embedded as a distribution, but not very sensitive.
 
+        self.output_dir = os.path.join(self.rundir, "displacements")
+        create_dir(self.output_dir)
+        self.logger = setup_logger("displacements", self.output_dir)
 
     def compute_probabilities(self):
-        logger.info("Calculating displacement probabilities.")
         # Create output dir
-        output_dir = os.path.join(self.rundir, "displacements")
-        create_dir(output_dir)
+        self.logger.info("Calculating displacement probabilities.")
         
         # Load and compute probability densities.
+        self.logger.info(f"Loads cumulative probabilities: {self.ky_dir}")
         cummulative_ky, ky_thresholds, profile = self.load_cummulative(self.ky_dir)
+        self.logger.info(f"Loads cumulative probabilities: {self.pga_dir}")
         cummulative_pga, pga_thresholds, profile = self.load_cummulative(self.pga_dir)
         ky_density = np.diff(cummulative_ky, axis=0)
         pga_density = np.diff(cummulative_pga, axis=0)
@@ -85,8 +84,8 @@ class DisplacementProbabilityAggregator:
 
         # Compute probabilities and write to files
         content = []
-        for i,delta in enumerate(self.displacement_thresholds):
-            logger.info(f"Delta: {delta}")
+        for i, delta in enumerate(self.displacement_thresholds):
+            self.logger.info(f"Delta: {delta}")
             d_is_bigger = log_d > np.log10(delta)
             probs = np.sum((pga_density[:,np.newaxis]*ky_density[np.newaxis,:])[d_is_bigger,:], axis=0)
             
@@ -99,12 +98,11 @@ class DisplacementProbabilityAggregator:
             # Write to file
             filename = f"exceedance_prob_{i}.tif"
             content.append({"file": filename, "threshold": delta, "value": "exceedance prob.", "unit":"", "scale":""})
-            write_tif(os.path.join(output_dir, filename), probs, profile)
-        write_content(content, output_dir)
+            write_tif(os.path.join(self.output_dir, filename), probs, profile, self.logger)
+        write_content(content, self.output_dir)
 
 
-    @staticmethod
-    def load_cummulative(dir):
+    def load_cummulative(self, dir):
         # load json file
         with open(os.path.join(dir, "content.json"),'r') as f:
             content = json.load(f)
@@ -118,7 +116,7 @@ class DisplacementProbabilityAggregator:
         for e in content:
             thresholds.append(e["threshold"])
             raster_path = os.path.join(dir, e["file"])
-            raster_data, msk, profile = read_tif(raster_path)
+            raster_data, msk, profile = read_tif(raster_path, self.logger)
             rasters.append(raster_data)
         return(np.stack(rasters), np.array(thresholds), profile)
     

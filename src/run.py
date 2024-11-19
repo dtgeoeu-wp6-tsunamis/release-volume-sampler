@@ -1,20 +1,10 @@
-import os, sys
-import logging
+import os
 import numpy as np
-from datetime import datetime
-from slope_analysis.slope_analysis import SlopeAnalysis
-from preprocess.preprocess import preprocess, slope, aspect
-from slopeunits.slopeunits import run_grassjob
-from utils.utils import create_dir
-from displacements.displacements import DisplacementProbabilityAggregator
-from shakemap_reader.shakemaps_reader import ShakemapsAggregator
-from collections import namedtuple
 import rasterio
-import shutil
 
-
-logging.basicConfig(level = logging.INFO)
-logger = logging.getLogger()
+from src.displacements.displacements import DisplacementProbabilityAggregator
+from src.shakemap_reader.shakemaps_reader import ShakemapsAggregator
+from src.utils.utils import create_dir
 
 
 def main():
@@ -42,19 +32,6 @@ def main():
     #run = "messina_001_20241023_071936"
     
     rundir =  os.path.join(generated, scenario)
-    logfile = os.path.join(rundir, "log.txt")
-    
-    #logFormatter = logging.Formatter("%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s")
-    logFormatter = logging.Formatter("'%(levelname)s:%(message)s'")
-
-    fileHandler = logging.FileHandler(os.path.join(rundir, "run.log"))
-    fileHandler.setFormatter(logFormatter)
-    logger.addHandler(fileHandler)
-
-    #consoleHandler = logging.StreamHandler()
-    #consoleHandler.setFormatter(logFormatter)
-    #logger.addHandler(consoleHandler)
-   
     
     # Parse and aggregate
     aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename)
@@ -73,7 +50,7 @@ def aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename):
     shakemaps_aggregator = ShakemapsAggregator(
         shakemaps_filename=shakemaps_filename,
         source_parameters_filename=source_parameters_filename,
-        thresholds=np.linspace(-3,0,30),
+        thresholds=np.linspace(-3,0,40),
         shake_value={"name": "pga", "function":shake_value_function},
         rundir=rundir)
     
@@ -90,6 +67,7 @@ def calculate_displacement_probabilities(rundir):
     thresholds = np.arange(1, 10, step=1.) # Displacement thresholds in cm.
     dpa = DisplacementProbabilityAggregator(rundir, thresholds, magnitude=7)
     dpa.compute_probabilities()
+
 
 if __name__ == "__main__":
     main()
