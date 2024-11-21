@@ -3,10 +3,9 @@ import os
 import json
 from scipy.interpolate import RegularGridInterpolator
 import csv
-from rasterio import CRS, Affine
 
-from src.utils.utils import create_dir, read_tif, write_tif, cummulative, write_content, setup_logger
-
+from src.utils.utils import create_dir, read_tif, write_tif, cummulative, write_content
+from src.utils.logging import setup_logger
 
 class ShakemapsAggregator:
     

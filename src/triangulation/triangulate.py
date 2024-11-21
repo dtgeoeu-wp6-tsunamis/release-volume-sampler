@@ -9,7 +9,9 @@ from pyproj import Transformer
 import matplotlib.cm as cm
 import os
 import meshio
-from src.utils.utils import create_dir, setup_logger
+from src.utils.utils import create_dir
+from src.utils.logging import setup_logger
+
 
 def main():
     """ To ensure that modules are imports works, run the script as a module.
@@ -20,7 +22,7 @@ def main():
         "rundir": "/home/ebr/projects/release-volume-sampler/generated/messina_001",
         "bathyfile": "bathy_truncated.tif",
         "utm_epsg_code": 32633, #Messina strait
-        "resolution": (100, 130)
+        "resolution": (120, 120)
     }
     optimization_params = {
         "num_iterations": 2000,
@@ -302,7 +304,7 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         
         # Triangulation plot
         ax.triplot(vertices[:, 0], vertices[:, 1], self.tri.simplices[self.triangle_is_interior()], color='gray', linewidth=0.4)
-        ax.scatter(vertices[:, 0], vertices[:, 1], color="black", s=1, label="Vertices")
+        ax.scatter(vertices[:, 0], vertices[:, 1], color="black", s=0.3, label="Vertices")
 
         # Title and labels
         ax.set_title("Optimized Triangulation", fontsize=16)

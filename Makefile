@@ -16,13 +16,26 @@ slopeunits: clean-slopeunits
 	@echo " Calculating slopeunits..."
 	poetry run python src/slopeunits/slopeunits.py $(GENERATED_DIR) $(IMAGE_PATH) $(PROJECTED_BATHY)
 
-analysis:
+# Multistep proceedures - Parameters set in python scripts
+analysis: clean-analysis
 	@echo " Run regional slope analysis and extract preselection of volumes..."
 	poetry run python -m src.regional_analysis
 
 run:
 	@echo " Run workflow from run.py..."
 	poetry run python -m src.run
+
+# Single step proceedures - Parameters set in main
+triangulation:
+	@echo " Triangulate domain ..."
+	poetry run python -m src.triangulation.triangulate
+
+triangle-lookuptable: triangulation
+	@echo " Computes lookuptable of logfos for triangulation..."
+	python -m src.triangulation.cumprobs_by_triangle
+
+sample-volumes: triangulation, triangle-lookuptable
+	@echo " Sample volumes from triangulation"
 
 plots:
 	@echo " Plot cummulatives.."

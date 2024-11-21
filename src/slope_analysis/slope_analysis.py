@@ -1,9 +1,9 @@
 import numpy as np
 import os
-import logging
 import json
 
-from src.utils.utils import read_tif, write_tif, create_dir, cummulative, setup_logger
+from src.utils.utils import read_tif, write_tif, create_dir, cummulative
+from src.utils.logging import setup_logger
 
 
 class SlopeAnalysis:

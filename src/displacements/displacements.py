@@ -1,9 +1,9 @@
 import numpy as np
 import os
-import logging
 import json
 
-from src.utils.utils import create_dir, read_tif, write_tif, write_content, setup_logger
+from src.utils.utils import create_dir, read_tif, write_tif, write_content 
+from src.utils.logging import setup_logger
 
 """ Cacluation of displacements probabilities from yield acceleration and shakemaps.
 """

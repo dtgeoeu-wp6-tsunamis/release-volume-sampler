@@ -1,8 +1,6 @@
 import os, sys
-import logging
 import numpy as np
 from datetime import datetime
-from collections import namedtuple
 import shutil
 import json
 
@@ -15,7 +13,8 @@ from src.triangulation.cumprobs_by_triangle import caclulate_cummulative_logfos_
 from src.volume_sampler.release_volume_sampler import RecursiveReleaseAnalysis
 
 from src.displacements.displacements import displacement
-from src.utils.utils import create_dir, setup_logger
+from src.utils.utils import create_dir
+from src.utils.logging import setup_logger
 
 
 def main():
@@ -110,10 +109,10 @@ def execute_slope_analysis(rundir):
     quantiles = [0.01, 0.1, 0.5, 0.9, 0.99]
     sa.compute_quantiles(quantiles, write_fos=True, write_ky=True)
     
-    fos_thresholds = np.linspace(0, 2, num=40)
+    fos_thresholds = np.linspace(0, 2, num=50)
     sa.compute_cummulative(fos_thresholds, feature_name="logfos", write=True)
     
-    ky_thresholds = np.linspace(-3,1, num=40)
+    ky_thresholds = np.linspace(-3,1, num=50)
     sa.compute_cummulative(ky_thresholds, feature_name="logky", write=True)
 
 
@@ -122,7 +121,7 @@ def triangulate_domain(rundir):
         "rundir": rundir,
         "bathyfile": "bathy_truncated.tif",
         "utm_epsg_code": 32633, #Messina strait
-        "resolution": (200, 200)
+        "resolution": (110, 110)
     }
     optimization_params = {
         "num_iterations": 2000,
@@ -150,9 +149,9 @@ def sample_release_volumes(rundir):
     }
     
     run_config = {
-        "fos_threshold": 1.1,
-        "recursive_probability_threshold": 0.01,
-        "seed_triangle_probability_threshold": 0.1,
+        "fos_threshold": 1.5,
+        "recursive_probability_threshold": 0.001,
+        "seed_triangle_probability_threshold": 0.01,
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)

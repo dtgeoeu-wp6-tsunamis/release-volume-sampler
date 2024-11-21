@@ -4,7 +4,8 @@ import os
 import numpy as np
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from src.utils.utils import read_tif, setup_logger
+from src.utils.utils import read_tif
+from src.utils.logging import setup_logger
 
 def main():
     """ To ensure that modules are imports works, run the script as a module.
@@ -29,7 +30,7 @@ def caclulate_cummulative_logfos_probabilities(rundir):
     with rasterio.open(tri_mask_path) as src:
         tri_mask = src.read(1)
 
-    n_triangles = int(tri_mask.max())
+    n_triangles = int(tri_mask.max()) + 1
     logger.info(f"Number of triangles: {n_triangles}.")
     
     logger.info(f"Loads cummulative probabilities from {cummulative_dir}")
