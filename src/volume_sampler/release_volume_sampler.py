@@ -25,7 +25,7 @@ def main():
     run_config = {
         "fos_threshold": 1.6,
         "recursive_probability_threshold": 0.01,
-        "seed_triangle_probability_threshold": 0.02,
+        "seed_triangle_probability_threshold": 0.01,
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)
@@ -179,11 +179,16 @@ class RecursiveReleaseAnalysis:
 
    
     def run(self, seed_triangle_probability_threshold, fos_threshold, recursive_probability_threshold):
-       
+        
         # Asssign class variables to Release. 
         Release.fos_threshold = fos_threshold             # To assign probability of released upstream triangles.
         Release.recursive_probability_threshold = recursive_probability_threshold # Recursive propagation truncated if probabiliy is below.
         Release.logger = self.logger
+        
+        self.logger.info(f"Run volume sampler: \
+            seed_triangle_probability: {seed_triangle_probability_threshold}, \
+            fos_threshold: {fos_threshold} \
+            recursive_probability_threshold: {recursive_probability_threshold}")
         
         # Filtration of seed triangles: P(fos < fos_threshold) > threshold
         all_triangles = np.arange(self.n_triangles)
@@ -204,8 +209,8 @@ class RecursiveReleaseAnalysis:
             # Append features
             for volume in volumes:
                 volume["area"] = self.areas[volume["released"]].sum()
-                volume["max_elevation"] = float(self.elevation[self.triangles[volume["released"]].flatten()].max()) # Elevation is point data.
-                volume["mean_slopes"] = self.slopes[volume["released"]].mean()
+                volume["mean_elevation"] = float(self.elevation[self.triangles[volume["released"]].flatten()].mean()) # Elevation is point data.
+                volume["mean_slope"] = self.slopes[volume["released"]].mean()
             
             recursive_propagations.append({
                 "seed_triangle": int(seed_triangle),
@@ -215,7 +220,7 @@ class RecursiveReleaseAnalysis:
         
         # Write to file.
         with open(os.path.join(self.output_dir, 'recursive_propagations.json'), 'w') as f:
-            json.dump(recursive_propagations, f, indent=4)
+            json.dump(recursive_propagations, f)
 
 
 class Release():
@@ -278,9 +283,9 @@ class Release():
 
 
     def write_release(self, volumes):
-        """Pass recursively throug set of releases and append terminated processes.
+        """Pass recursively throug set of releases and append terminated processes with nonzero probabilities.
         """
-        if len(self.children) == 0:
+        if len(self.children) == 0 and self.probability > 0.:
             new_volume = {
                 "released": self.released, 
                 "condprob": self.probability, 

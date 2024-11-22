@@ -4,6 +4,7 @@ import rasterio
 import json
 import numpy as np
 from contextlib import contextmanager
+import shutil
 
 
 def read_tif(fname, logger=None):
@@ -24,7 +25,16 @@ def write_tif(fname, data, profile, logger=None):
         dst.write(data, 1)
 
 
-def create_dir(dir_name, logger = None):
+def create_dir(dir_name, logger = None, clear=False):
+    if clear and os.path.exists(dir_name):
+        # Clear content
+        if logger: 
+            logger.info(f"Directory exists: {dir_name}")
+        try:
+            logger.info("Delete directory...")
+            shutil.rmtree(dir_name)
+        except OSError as e:
+            sys.exit(f"Can't delete content - {dir_name}: {e}")
     if not os.path.exists(dir_name):
         try:
             os.makedirs(dir_name)
