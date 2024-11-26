@@ -23,9 +23,9 @@ def main():
     }
     
     run_config = {
-        "fos_threshold": 1.6,
+        "fos_threshold": 1.5,
         "recursive_probability_threshold": 0.01,
-        "seed_triangle_probability_threshold": 0.01,
+        "seed_triangle_probability_threshold": 1e-3,
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)
@@ -95,7 +95,7 @@ class RecursiveReleaseAnalysis:
         # Load lookuptable
         self.logger.info(f"Load cumulative probabilities: {self.cumprob_logfos_path}.")
         cumprob_logfos_npz = np.load(self.cumprob_logfos_path)
-        self.cumprob_thresholds, self.cumprob_logfos = cumprob_logfos_npz["thresholds"], cumprob_logfos_npz["cummulative_probs"]
+        self.cumprob_thresholds, self.cumprob_logfos = cumprob_logfos_npz["thresholds"], cumprob_logfos_npz["probs"]
 
 
     def _compute_triangle_properties(self):
@@ -214,7 +214,7 @@ class RecursiveReleaseAnalysis:
             
             recursive_propagations.append({
                 "seed_triangle": int(seed_triangle),
-                "seed_triangle_probability": seed_probability[seed_triangle],
+                "p_fos_seed": seed_probability[seed_triangle],
                 "volumes": volumes
             })
         

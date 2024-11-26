@@ -7,9 +7,12 @@ import json
 import argparse
 import logging
 from src.utils.utils import read_tif, create_dir
-
-logging.basicConfig(level = logging.INFO)
-logger = logging.getLogger('plot')
+from src.utils.logging import setup_logger
+import rasterio
+from rasterio.plot import show
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from matplotlib.ticker import FuncFormatter
 
 """
 Script to plot content of the generated folder.
@@ -34,15 +37,8 @@ def parse_args():
     parser.add_argument(
         '--m', 
         type=float, 
-        default=-np.inf,
+        default=np.inf,
         help="Max value of colorbar."
-    )
-    parser.add_argument(
-        '--logscale',
-        action=argparse.BooleanOptionalAction, 
-        type=bool,
-        help="Plot values in logscale.",
-        default=False
     )
 
     # Parse the arguments
@@ -57,67 +53,123 @@ def parse_args():
     return args
 
 
-def plot(working_dir, logscale, m):    
+def plot(working_dir, m):    
     # Create output folder
     plot_dir = os.path.join(working_dir, "plots")
     create_dir(plot_dir)
+    
+    logger = setup_logger("plot", plot_dir)
     
     # load json file
     with open(os.path.join(working_dir, "content.json"),'r') as f:
         content = json.load(f)
 
+    global_min, global_max = get_global_maxmin(working_dir, content, m, logger)
+
+    # Loop through each raster and plot
+    for i, e in enumerate(content):
+        # Set title
+        if "quantile" in e.keys():
+            quantile = e["quantile"]
+            title = f"Quantile: {quantile}."
+        if "sample" in e.keys():
+            sample = e["sample"]
+            title = f"Sample: {sample}."
+        if "threshold" in e.keys():
+            threshold = e["threshold"]
+            title = f"Threshold: {threshold}."
+        
+        # Make plot
+        plot_raster(working_dir, plot_dir, e["file"], global_min, global_max, e["value"], e["unit"], title, logger)
+
+
+def get_global_maxmin(working_dir, content, m, logger):
     # Initialize lists to store raster data and no-data values
-    rasters = []
-    nodata_vals = []
+    mins, maxs =[], []
 
     # Read all rasters and store the data
     for e in content:
         raster_path = os.path.join(working_dir, e["file"])
         raster_data, msk, profile = read_tif(raster_path)
+        mins.append(np.nanmin(raster_data))
+        maxs.append(np.nanmax(raster_data))
         
-        
-        if not logscale and e["scale"] == "log10":
-            logger.info("Transform output from log10 scale.")
-            rasters.append(10**raster_data)
-        else:
-            rasters.append(raster_data)
-            
 
     # Get the global min and max across all rasters, ignoring no-data values
-    global_min = min([np.nanmin(r) for r in rasters])
-    global_max = max(max([np.nanmax(r) for r in rasters]), m)
+    global_min, global_max = min(mins), min(max(maxs), m)
     logger.info(f"global_min: {global_min}, global_max: {global_max}")
+    return(global_min, global_max)
 
-    # Loop through each raster and plot
-    for i, e in enumerate(content):
-        fig, ax = plt.subplots() 
-        # Plot the raster with a shared color scale (global_min, global_max)
-        img = ax.imshow(rasters[i], vmin=global_min, vmax=global_max, cmap='tab20b_r')
-        #img = ax.imshow(rasters[i], norm=LogNorm())
-        
-        # Add title
-        if "quantile" in e.keys():
-            quantile = e["quantile"]
-            ax.set_title(f"Quantile: {quantile}.", loc="left")
-        if "sample" in e.keys():
-            sample = e["sample"]
-            ax.set_title(f"Sample: {sample}.", loc="left")
-        if "threshold" in e.keys():
-            threshold = e["threshold"]
-            ax.set_title(f"Threshold: {threshold}.", loc="left")
-    
-        # Add a single colorbar for the entire figure
-        #cbar = fig.colorbar(img, ax=axes, orientation='vertical', fraction=0.08, pad=0.01)
-        filename, value, unit = e["file"].replace(".tif",".png"), e["value"], e["unit"]
-        fig.colorbar(img, ax=ax, label=f"{value}")
 
-        # Adjust layout and show the plot
-        fig.savefig(os.path.join(plot_dir, filename))
-        plt.close()
+def plot_raster(working_dir, plot_dir, file, global_min, global_max, value, unit, title, logger):
     
+    # Load raster data
+    with rasterio.open(os.path.join(working_dir, file)) as src:
+        data = src.read(1)
+        bounds = src.bounds
+        crs = src.crs
+
+    # Convert bounds to extent
+    extent = [bounds.left, bounds.right, bounds.bottom, bounds.top]
+
+    # Create a map with the raster CRS
+    if crs.is_geographic:
+        projection = ccrs.PlateCarree()
+    else:
+        projection = ccrs.epsg(crs.to_epsg())
+         
+
+    # Plot raster with Cartopy
+    fig, ax = plt.subplots(figsize=(12, 6), subplot_kw={'projection': projection})
+    img = ax.imshow(
+        data,
+        origin='upper',
+        vmin=global_min,
+        vmax=global_max,
+        extent=extent,
+        transform=projection,
+        cmap='tab20b_r'
+    )
+    ax.set_title(title, loc="left")
+    
+    # Add map features
+    #ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+    #ax.add_feature(cfeature.BORDERS, linestyle=':')
+    
+    # Calculate tick values dynamically based on raster bounds
+    lon_ticks = np.linspace(bounds.left, bounds.right, num=5)  # 5 ticks along longitude
+    lat_ticks = np.linspace(bounds.bottom, bounds.top, num=5)  # 5 ticks along latitude
+    
+    # Add gridlines
+    gridlines = ax.gridlines(
+        draw_labels=True,  # Show labels on gridlines
+        xlocs=lon_ticks,  # X ticks (longitudes)
+        ylocs=lat_ticks,  # Y ticks (latitudes)
+        linewidth=0.5,
+        color='gray',
+        linestyle='--'
+    )
+
+    # Customize tick labels
+    gridlines.xlabel_style = {'size': 10, 'color': 'black'}
+    gridlines.ylabel_style = {'size': 10, 'color': 'black'}
+
+    gridlines.right_labels = False
+
+    # Add a single colorbar for the entire figure
+    #cbar = fig.colorbar(img, ax=axes, orientation='vertical', fraction=0.08, pad=0.01)
+    fig.colorbar(img, ax=ax, label=f"{value}")
+
+    # Adjust layout and show the plot
+    filename = os.path.join(plot_dir, file.replace(".tif",".png"))
+    fig.tight_layout(rect=[0, 0, 1, 0.95])  # Leave space for the title 
+    fig.savefig(filename)
+    logger.info(f"Created figure: {filename}")
+    plt.close()
+    
+
     
 if __name__ == "__main__":
     # Parse and retrieve the arguments
     args = parse_args()
-    logger.info(f"args: {args}")
-    plot(args.folder, logscale=args.logscale, m=args.m)
+    plot(args.folder, m=args.m)

@@ -5,19 +5,16 @@ import rasterio
 from src.displacements.displacements import DisplacementProbabilityAggregator
 from src.shakemap_reader.shakemaps_reader import ShakemapsAggregator
 from src.utils.utils import create_dir
+from src.triangulation.cumprobs_by_triangle import caclulate_cummulative_probabilities
 
 
 def main():
     """
     This script calculates the probability that displacements is larger than a given threshold
-    in a given earthquake scenario. This is applied to sample release volumes. 
+    in a given earthquake scenario. This is applied to assign probabilities of each release 
+    volume associated with the given shakemap. 
     
     Note that the script has to be executed after the regional stability analysis.
-    
-    Outline:
-        - Calculate displacements from yield acellerations and shakemaps.
-        - Sample volumes based on displacements and slopeunits.
-        - Project sampled volumes onto a preselected set of scenarios.
         
     """
     # Settings
@@ -38,6 +35,14 @@ def main():
     
     #calculate displacement probabilities
     calculate_displacement_probabilities(rundir)
+    
+    # Calculate cumulative probabilities lookup table by triangle
+    displacements_exceedance_params = {
+        "rundir": rundir,
+        "cummulative_dir": os.path.join(rundir, "displacements"),
+        "outfile_name": "exceedance_displacement.npz"
+    }
+    caclulate_cummulative_probabilities(**displacements_exceedance_params)
     
 
 def aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename):
@@ -67,6 +72,7 @@ def calculate_displacement_probabilities(rundir):
     thresholds = np.arange(1, 10, step=1.) # Displacement thresholds in cm.
     dpa = DisplacementProbabilityAggregator(rundir, thresholds, magnitude=7)
     dpa.compute_probabilities()
+    
 
 
 if __name__ == "__main__":

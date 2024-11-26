@@ -9,7 +9,7 @@ from src.preprocess.preprocess import preprocess, slope, aspect, surface_area_ra
 from src.slopeunits.slopeunits import run_grassjob
 from src.slope_analysis.slope_analysis import SlopeAnalysis
 from src.triangulation.triangulate import Triangulation
-from src.triangulation.cumprobs_by_triangle import caclulate_cummulative_logfos_probabilities
+from src.triangulation.cumprobs_by_triangle import caclulate_cummulative_probabilities
 from src.volume_sampler.release_volume_sampler import RecursiveReleaseAnalysis
 
 from src.displacements.displacements import displacement
@@ -136,7 +136,9 @@ def triangulate_domain(rundir):
     triang.write_to_file()
     
     # Calculate cumulative probabilities lookup table by triangle
-    caclulate_cummulative_logfos_probabilities(rundir)
+    cummulative_dir = os.path.join(rundir, "slope_analysis", "fos", "cummulative")
+    outfile_name = "cummulative_fos.npz" # Writes to triangulation dir..
+    caclulate_cummulative_probabilities(rundir, cummulative_dir, outfile_name)
 
 
 def sample_release_volumes(rundir):

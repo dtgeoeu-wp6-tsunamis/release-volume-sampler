@@ -30,30 +30,33 @@ triangulation:
 	@echo " Triangulate domain ..."
 	poetry run python -m src.triangulation.triangulate
 
-triangle-lookuptable: triangulation
+lookuptables: #triangulation
 	@echo " Computes lookuptable of logfos for triangulation..."
 	python -m src.triangulation.cumprobs_by_triangle
 
-sample-volumes: triangulation, triangle-lookuptable
+volumes: #triangulation, triangle-lookuptable
 	@echo " Sample volumes from triangulation"
+	poetry run python -m src.volume_sampler.release_volume_sampler
+	python -m src.volume_sampler.volume_writer
+
 
 plots:
 	@echo " Plot cummulatives.."
 	@for folder in $(shell find $(RUNDIR) -type d -name "cummulative"); do \
 		echo "Plot content $$folder"; \
-		poetry run python -m src.plot "$$folder" --logscale; \
+		poetry run python -m src.plot "$$folder"; \
 	done
 	
 	@echo " Plot quantiles.."
 	@for folder in $(shell find $(RUNDIR) -type d -name "quantiles"); do \
 		echo "Plot content $$folder"; \
-		poetry run python -m src.plot "$$folder" --logscale; \
+		poetry run python -m src.plot "$$folder"; \
 	done
 	
 	@echo " Plot displacements.."
 	@for folder in $(shell find $(RUNDIR) -type d -name "displacements"); do \
 		echo "Plot content $$folder"; \
-		poetry run python -m src.plot "$$folder" --logscale; \
+		poetry run python -m src.plot "$$folder"; \
 	done
 
 clean-slopeunits:

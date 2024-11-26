@@ -12,16 +12,31 @@ def main():
     
     release-volume-sampler$ python -m src.triangulation.cumprobs_by_triangle
     """
-    
+    # Cummulative probabilities for FOS
     rundir = "/home/ebr/projects/release-volume-sampler/generated/messina_001"
-    caclulate_cummulative_logfos_probabilities(rundir)
+    params = {
+        "rundir": rundir,
+        "cummulative_dir": os.path.join(rundir, "slope_analysis", "fos", "cummulative"),
+        "outfile_name": "cummulative_fos.npz"
+    }
+    caclulate_cummulative_probabilities(**params)
+    
+    # Exceedance probabilities for displacement.
+    params = {
+        "rundir": rundir,
+        "cummulative_dir": os.path.join(rundir, "displacements"),
+        "outfile_name": "exceedance_displacement.npz"
+    }
+    
+    #caclulate_cummulative_probabilities(**params)
 
 
-def caclulate_cummulative_logfos_probabilities(rundir):
-    """ Creates lookup table for the cummulative probability of the fos by triangle.
+def caclulate_cummulative_probabilities(rundir, cummulative_dir, outfile_name):
+    """ Creates lookup table.
     """
-    cummulative_dir = os.path.join(rundir, "slope_analysis", "fos", "cummulative")
+    
     triangulation_dir = os.path.join(rundir, "triangulation")
+    outfile = os.path.join(triangulation_dir, outfile_name)
     tri_mask_path = os.path.join(triangulation_dir, "triangulation.tif")
     
     logger = setup_logger("cumprob", triangulation_dir)
@@ -37,7 +52,7 @@ def caclulate_cummulative_logfos_probabilities(rundir):
     with open(os.path.join(cummulative_dir, "content.json"),'r') as f:
         content = json.load(f)
 
-    triangle_cummulative_probs = np.empty((n_triangles, len(content)))
+    triangle_probs = np.empty((n_triangles, len(content)))
     thresholds = np.empty(len(content))
     
     # Parallel execution
@@ -47,11 +62,11 @@ def caclulate_cummulative_logfos_probabilities(rundir):
         raster_data, msk, profile = read_tif(raster_path, logger)
         
         # Prepare the output for a single raster
-        cummulative_probs = np.full(n_triangles, np.nan)
+        probs = np.full(n_triangles, np.nan)
         for tri_index in range(n_triangles):
-            cummulative_probs[tri_index] = np.nanmin(raster_data[tri_mask == tri_index], initial=9999)
+            probs[tri_index] = np.nanmin(raster_data[tri_mask == tri_index], initial=9999)
         
-        return raster_index, e['threshold'], cummulative_probs
+        return raster_index, e['threshold'], probs
     
     with ThreadPoolExecutor() as executor:
         futures = {
@@ -59,12 +74,12 @@ def caclulate_cummulative_logfos_probabilities(rundir):
         }
 
         for future in as_completed(futures):
-            raster_index, threshold, cummulative_probs = future.result()
+            raster_index, threshold, probs = future.result()
             thresholds[raster_index] = threshold
-            triangle_cummulative_probs[:, raster_index] = cummulative_probs
+            triangle_probs[:, raster_index] = probs
             logger.info(f"Processing raster {raster_index} is complete.")
 
-    np.savez(os.path.join(triangulation_dir,"cummulative_fos.npz"), thresholds=thresholds, cummulative_probs=triangle_cummulative_probs) 
+    np.savez(outfile, thresholds=thresholds, probs=triangle_probs) 
 
 
 if __name__ == "__main__":

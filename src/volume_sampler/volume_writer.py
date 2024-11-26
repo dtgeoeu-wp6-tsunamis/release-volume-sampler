@@ -7,27 +7,40 @@ import matplotlib.pyplot as plt
 from src.utils.logging import setup_logger
 from src.utils.utils import create_dir
 from scipy.signal import convolve2d
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.colors import LogNorm
+from scipy.interpolate import interp1d
 
 
 def main():
     """ To ensure that module imports works, run the script as a module.
-    release-volume-sampler$ python -m src/volume_sampler.volume_writer
+    release-volume-sampler$ python -m src.volume_sampler.volume_writer
     """
     # Usage example
     config = {
         "rundir": "/home/ebr/projects/release-volume-sampler/generated/messina_001",
     }
     
-    write_config = {
-        "write_rasters": True,
+    filter_config = {
         "tsunami_potential_ratio_threshold": 1.,
         "max_rasters": 1000,
     }
     
+    
     # Execute
     writer = VolumeWriter(**config)
-    writer.write_volumes(**write_config)
-    writer.plot_distribution()
+    writer.load_probabilities_from_shakemap(displacement_threshold=5., 
+                                            table_filename="exceedance_displacement.npz", 
+                                            name = "p_shake")
+    
+    #writer.write_volumes_to_csv()
+    #writer.write_volumes_to_rasters(**filter_config)
+    #writer.plot_distribution()
+    #writer.plot_release_density_plots()
+    
+    writer.plot_distribution(seed_prob="p_shake")
+    writer.plot_release_density_plots(seed_prob="p_shake")
+    
 
 class VolumeWriter:
     """
@@ -37,7 +50,7 @@ class VolumeWriter:
     1. Filter volumes based on the tsunamogenic potential. Using statistical relations.
     2. Assign thickness (Statistically from total area), smooth and create raster files.
     3. Make figures to obtain an overview of the distribution.
-    4. Assign probabilities from shakemaps. #TODO
+    4. Assign probabilities from shakemaps.
     
     """
     def __init__(self, rundir):
@@ -46,15 +59,20 @@ class VolumeWriter:
         self.output_dir = os.path.join(rundir, "volumes")
         self.triangulation_dir = os.path.join(rundir, "triangulation")
         self.tri_mask_path = os.path.join(self.triangulation_dir, "triangulation.tif")
+        
+        with rasterio.open(self.tri_mask_path) as src:
+            self.tri_mask = src.read(1)  # Read the triangle mask
+            self.tri_profile = src.profile  # Copy metadata to use in output
+        
         self.logger = setup_logger("volume_writer", self.output_dir)
         
         self.load_volumes()
         self.assign_thickness()
         self.assign_tsunami_potential_ratio()
 
- 
+
     def load_volumes(self):
-        """Load volumes from sampler.
+        """Load volumes.
         """
         with open(os.path.join(self.output_dir, "recursive_propagations.json"), "r") as f:
             data = json.load(f)
@@ -63,14 +81,14 @@ class VolumeWriter:
         self.df = pd.json_normalize(
             data,
             record_path=["volumes"],  # Extract and flatten the "volumes" list
-            meta=["seed_triangle", "seed_triangle_probability"]  # Include these fields as metadata
-        ).astype({"seed_triangle": int, "seed_triangle_probability": float})
+            meta=["seed_triangle", "p_fos_seed"]  # Include these fields as metadata
+        ).astype({"seed_triangle": int, "p_fos_seed": float})
         self.df.drop(columns=["steps"], inplace=True)
         self.df['id'] = self.df.index
         
         # Use seed probability to set final probability
-        self.df["probability"] = self.df.seed_triangle_probability*self.df.condprob
-        self.df["probability"] = self.df["probability"]/self.df["probability"].sum()
+        #self.df["probability"] = self.df.p_fos_seed*self.df.condprob
+        #self.df["probability"] = self.df["probability"]/self.df["probability"].sum()
         
     
     def assign_thickness(self):
@@ -85,7 +103,7 @@ class VolumeWriter:
         """Estimate tsunami potential.
         
         Based on equations of Watts et al. (2005). 
-        V_{min}=0.0957*slope^{-1.609}*thickness^{1.3807} where V_{min} is the minimum volume
+        V_{min}=0.0957*slope^{-1.609}*H^{1.3807} where V_{min} is the minimum volume
         that can create a significant tsunami for a given water depth H (in m) and slope angle
         (in degrees) and V_{min} in Mm^{3}.
         
@@ -93,74 +111,174 @@ class VolumeWriter:
         """
         self.df["tsunami_potential_ratio"] = self.df.volume/(0.0957*(self.df.mean_slope**-1.609)*((0-self.df.mean_elevation)**1.3807)*1e6)
         
-    
-    def write_volumes(self, write_rasters=True, tsunami_potential_ratio_threshold=1., max_rasters=1000):
-        """ Write csv with all volumes. Volumes are sorted according to tsunami_potential_ratio_threshold.
+
+    def load_probabilities_from_shakemap(self, displacement_threshold, table_filename, name = "p_shake"):
+        """Loads shakemap and assigns the probability that the displacement is larger than the displacement_threshold
+        to the writers dataframe.
+        
+        Parameters:
+            displacement_threshold (float): Threshold for calculation of probability. 
+                Must lie within the range of calculated probabilities.
+            lookup_table (str): filename of the lookuptable. Has to be located in the triangulation output dir.
+            name (str): Column name of the assigned variable in the volume writers dataframe. 
         """
+        # Load lookuptable
+        lookup_table_path = os.path.join(self.triangulation_dir, table_filename)
+        self.logger.info(f"Load exceedance probabilities: {lookup_table_path}.")
+        diplacement_exceedance = np.load(lookup_table_path)
+        thresholds, exceedance_probs = diplacement_exceedance["thresholds"], diplacement_exceedance["probs"]
+        
+        interpolator = interp1d(x=thresholds, y=exceedance_probs, fill_value=(1.,0.), bounds_error=True)
+        self.df[name] = interpolator(displacement_threshold)[self.df.seed_triangle.to_numpy()]
+    
+    
+    def write_volumes_to_csv(self, subset = None):
         self.df.drop(columns=["released"]).to_csv(os.path.join(self.output_dir, "volumes.csv"),
                                                   float_format="%.6e")
-        if write_rasters:
-            rasterdir = os.path.join(self.output_dir, "rasters")
-            create_dir(rasterdir, logger=self.logger, clear=True)
-            with rasterio.open(self.tri_mask_path) as src:
-                tri_mask = src.read(1)  # Read the triangle mask
-                tri_profile = src.profile  # Copy metadata to use in output
+    
+    
+    def write_volumes_to_rasters(self, tsunami_potential_ratio_threshold=1., max_rasters=1000):
+        """ Write csv with all volumes. Volumes are sorted according to tsunami_potential_ratio_threshold.
+        """
+        rasterdir = os.path.join(self.output_dir, "rasters")
+        create_dir(rasterdir, logger=self.logger, clear=True)
+        with rasterio.open(self.tri_mask_path) as src:
+            tri_mask = src.read(1)  # Read the triangle mask
+            tri_profile = src.profile  # Copy metadata to use in output
 
-            # Update profile for single-band, unsigned 8-bit data
-            tri_profile.update(dtype=rasterio.float32, count=1)
-            #tri_profile.update(driver="AAIGrid") # Write asci files.
-            
-            df_filtered = self.df[self.df.tsunami_potential_ratio > tsunami_potential_ratio_threshold]
-            df_filtered = df_filtered.sort_values("tsunami_potential_ratio", ascending=False)
-            
-            for i, volume in df_filtered.iloc[:max_rasters].iterrows():
-                # Create binary volume mask: 1 if pixel belongs to specified triangles, else 0
-                volume_mask = np.isin(tri_mask, volume.released)
-                
-                # Smooth volume
-                volume_raster = convolve2d(volume_mask.astype(float)*volume.thickness, np.ones((3,3))/9., mode="same")
-                volume_path = os.path.join(self.output_dir, f"rasters/volume_seed-{volume.seed_triangle}_area-{volume.area:.2e}_id-{volume.id}.tif")
-
-                with rasterio.open(volume_path, 'w', **tri_profile) as dst:
-                    dst.write(volume_raster.astype(rasterio.float32), 1)  # Write volume to file
-                self.logger.info(f"Wrote volume raster:{volume_path}")
+        # Update profile for single-band, unsigned 8-bit data
+        tri_profile.update(dtype=rasterio.float32, count=1)
+        #tri_profile.update(driver="AAIGrid") # Write asci files.
         
+        df_filtered = self.df[self.df.tsunami_potential_ratio > tsunami_potential_ratio_threshold]
+        df_filtered = df_filtered.sort_values("tsunami_potential_ratio", ascending=False)
+        
+        # Write filtered to csv file.
+        df_filtered.iloc[:max_rasters].drop(columns=["released"]).to_csv(os.path.join(rasterdir, "rasterized_volumes.csv"),
+                                                  float_format="%.6e")
+        
+        for i, volume in df_filtered.iloc[:max_rasters].iterrows():
+            # Create binary volume mask: 1 if pixel belongs to specified triangles, else 0
+            volume_mask = np.isin(tri_mask, volume.released)
+            
+            # Smooth volume
+            volume_raster = convolve2d(volume_mask.astype(float)*volume.thickness, np.ones((3,3))/9., mode="same")
+            volume_path = os.path.join(self.output_dir, f"rasters/volume_id-{volume.id}_seed-{volume.seed_triangle}_ratio-{volume.tsunami_potential_ratio:.2e}.tif")
 
-    def plot_distribution(self):
+            with rasterio.open(volume_path, 'w', **tri_profile) as dst:
+                dst.write(volume_raster.astype(rasterio.float32), 1)  # Write volume to file
+            self.logger.info(f"Wrote volume raster:{volume_path}")
+    
+
+    def plot_distribution(self, seed_prob="p_fos_seed"):
         """Create figures to display the volume distribution.
         """
+        probability = self.df[seed_prob]*self.df.condprob
         
         # Create a figure and axis objects
-        fig, axes = plt.subplots(2, 2, figsize=(12, 8))  # 2 rows, 2 columns of plots
-        fig.suptitle("Release Characteristics", fontsize=16)
+        fig, axes = plt.subplots(3, 2, figsize=(12, 12))  # 3 rows, 2 columns of plots
+        fig.suptitle(f"Release Characteristics - seed_prob: {seed_prob}", fontsize=16)
 
         # Top-left: Histogram of area
         axes[0, 0].hist(self.df.area, bins=30, color="skyblue", edgecolor="black")
+        axes[0, 0].set_yscale('log', nonpositive='clip')
+        axes[0, 0].grid(which='major', axis='y')
         axes[0, 0].set_title("Area of Release")
         axes[0, 0].set_xlabel("Area")
         axes[0, 0].set_ylabel("Frequency")
+        
+        # Top-right: Weighted histogram of area
+        axes[0, 1].hist(self.df.area, bins=30, weights=probability, color="salmon", edgecolor="black")
+        axes[0, 1].set_title("Weighted Area of Release")
+        axes[0, 1].set_xlabel("Area")
+        axes[0, 1].set_ylabel("Weighted Frequency")
 
-        # Top-right: Histogram of thickness
-        axes[0, 1].hist(self.df.thickness, bins=30, color="lightgreen", edgecolor="black")
-        axes[0, 1].set_title("Thickness of Release")
-        axes[0, 1].set_xlabel("Thickness")
-        axes[0, 1].set_ylabel("Frequency")
+        # Middle-left: Histogram of thickness
+        axes[1, 0].hist(self.df.thickness, bins=30, color="lightgreen", edgecolor="black")
+        axes[1, 0].set_yscale('log', nonpositive='clip')
+        axes[1, 0].grid(which='major', axis='y')
+        axes[1, 0].set_title("Thickness of Release")
+        axes[1, 0].set_xlabel("Thickness")
+        axes[1, 0].set_ylabel("Frequency")
 
-        # Bottom-left: Weighted histogram of area
-        axes[1, 0].hist(self.df.area, bins=30, weights=self.df.probability, color="salmon", edgecolor="black")
-        axes[1, 0].set_title("Weighted Area of Release")
-        axes[1, 0].set_xlabel("Area")
-        axes[1, 0].set_ylabel("Weighted Frequency")
-
-        # Bottom-right: Weighted histogram of thickness
-        axes[1, 1].hist(self.df.thickness, bins=30, weights=self.df.probability, color="orange", edgecolor="black")
+        # Middle-right: Weighted histogram of thickness
+        axes[1, 1].hist(self.df.thickness, bins=30, weights=probability, color="orange", edgecolor="black")
         axes[1, 1].set_title("Weighted Thickness of Release")
         axes[1, 1].set_xlabel("Thickness")
         axes[1, 1].set_ylabel("Weighted Frequency")
+        
+        # Bottom-left: Weighted histogram of area
+        axes[2, 0].hist(self.df.tsunami_potential_ratio, bins=30, color="salmon", edgecolor="black")
+        axes[2, 0].set_yscale('log', nonpositive='clip')
+        axes[2, 0].grid(which='major', axis='y')
+        axes[2, 0].set_title("Tsunami Potential Ratio of Release")
+        axes[2, 0].set_xlabel("Tsunami Potential Ratio")
+        axes[2, 0].set_ylabel("Frequency")
+
+        # Bottom-right: Weighted histogram of thickness
+        axes[2, 1].hist(self.df.tsunami_potential_ratio, bins=30, weights=probability, color="orange", edgecolor="black")
+        #axes[2, 1].set_yscale('log', nonpositive='clip')
+        axes[2, 1].set_title("Weighted Tsunami Potential Ratio of Release")
+        axes[2, 1].set_xlabel("Tsunami Potential Ratio")
+        axes[2, 1].set_ylabel("Weighted Frequency")
 
         plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave space for the main title
-        plt.savefig(os.path.join(self.output_dir, "release_characteristics.png"))  # Save as an image file
+        plt.savefig(os.path.join(self.output_dir, f"release_characteristics-{seed_prob}.png"))
 
+
+    def plot_release_density_plots(self, seed_prob="p_fos_seed"):
+        """ Create figure to display the location of the sampled release volumes.
+        """
+        self.logger.info(" Create spatial release density figure.")
+        n_triangles = int(self.tri_mask.max()) + 1
+        counts = np.zeros(n_triangles)
+        probs = np.zeros(n_triangles)
+
+        for i, row in self.df.iterrows():
+            counts[row.released] += 1.
+            probs[row.released] += row[seed_prob]*row.condprob
+
+        counts_raster = np.zeros(self.tri_mask.shape)
+        probs_raster = np.ones(self.tri_mask.shape)
+
+        for tri_index in range(n_triangles):
+            counts_raster += np.where(self.tri_mask == tri_index, counts[tri_index], 0)
+            probs_raster *= np.where(self.tri_mask == tri_index, 1. - probs[tri_index], 1.)
+            if tri_index % 500 == 0:
+                self.logger.info(f"Aggregated triangles: {tri_index}") 
+        probs_raster = 1. - probs_raster
+        # Create subplots
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))  # 1 row, 2 columns of plots
+        fig.suptitle(f"Spatial distribution of release volumes - seed_prob: {seed_prob}", fontsize=16)
+
+        # Plot the first raster
+        counts_im = axes[0].imshow(
+            counts_raster,
+            cmap="tab20b",
+            norm=LogNorm(vmin=1, vmax=np.nanmax(counts_raster), clip=True),
+        )
+
+        # Plot the second raster
+        prob_im = axes[1].imshow(
+            probs_raster,
+            cmap="tab20b",
+            norm=LogNorm(vmin=1e-6, vmax=1., clip=True),
+        )
+
+        # Create colorbars with the same height as the subplots
+        # For the first axis
+        divider1 = make_axes_locatable(axes[0])
+        cax1 = divider1.append_axes("right", size="5%", pad=0.1)  # Adjust size and padding
+        fig.colorbar(counts_im, cax=cax1, label="Counts")
+
+        # For the second axis
+        divider2 = make_axes_locatable(axes[1])
+        cax2 = divider2.append_axes("right", size="5%", pad=0.1)  # Adjust size and padding
+        fig.colorbar(prob_im, cax=cax2, label="Probability")
+
+        # Adjust layout
+        plt.tight_layout(rect=[0, 0, 1, 0.95])  # Leave space for the title
+        plt.savefig(os.path.join(self.output_dir, f"release_distribution-{seed_prob}.png")) 
 
 if __name__ == "__main__":
     main()
