@@ -4,8 +4,8 @@ import numpy as np
 import rasterio
 import shutil
 
-from src.utils.utils import read_tif, write_tif, temporary_working_directory, log_process
-from src.utils.logging import setup_logger
+from utils import read_tif, write_tif, temporary_working_directory, log_process
+from logging import setup_logger
 
 MAX_PROCS_PER_DEM = 8
 

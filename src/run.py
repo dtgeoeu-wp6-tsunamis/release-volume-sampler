@@ -2,10 +2,10 @@ import os
 import numpy as np
 import rasterio
 
-from src.displacements.displacements import DisplacementProbabilityAggregator
-from src.shakemap_reader.shakemaps_reader import ShakemapsAggregator
-from src.utils.utils import create_dir
-from src.triangulation.cumprobs_by_triangle import caclulate_cummulative_probabilities
+from src.rvsampler.displacements import DisplacementProbabilityAggregator
+from src.rvsampler.shakemaps_reader import ShakemapsAggregator
+from src.rvsampler.utils import create_dir
+from src.rvsampler.cumprobs_by_triangle import caclulate_cummulative_probabilities
 
 
 def main():

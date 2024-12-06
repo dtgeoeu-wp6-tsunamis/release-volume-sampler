@@ -4,8 +4,8 @@ import json
 from scipy.interpolate import RegularGridInterpolator
 import csv
 
-from src.utils.utils import create_dir, read_tif, write_tif, cummulative, write_content
-from src.utils.logging import setup_logger
+from utils import create_dir, read_tif, write_tif, cummulative, write_content
+from logging import setup_logger
 
 class ShakemapsAggregator:
     
@@ -48,7 +48,7 @@ class ShakemapsAggregator:
             shakemap_content.append({
                 "file": filename,
                 "threshold":threshold,
-                "value":self.shake_value["name"],
+                "value":"Probability",
                 "scale":"log10",
                 "unit":"g"
             })

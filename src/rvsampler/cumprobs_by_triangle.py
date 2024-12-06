@@ -2,10 +2,9 @@ import rasterio
 import json
 import os
 import numpy as np
-import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from src.utils.utils import read_tif
-from src.utils.logging import setup_logger
+from utils import read_tif
+from logging import setup_logger
 
 def main():
     """ To ensure that modules are imports works, run the script as a module.

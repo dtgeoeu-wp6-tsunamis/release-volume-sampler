@@ -5,16 +5,15 @@ import shutil
 import json
 
 # Import from modules.
-from src.preprocess.preprocess import preprocess, slope, aspect, surface_area_ratio, compute_pixel_areas
-from src.slopeunits.slopeunits import run_grassjob
-from src.slope_analysis.slope_analysis import SlopeAnalysis
-from src.triangulation.triangulate import Triangulation
-from src.triangulation.cumprobs_by_triangle import caclulate_cummulative_probabilities
-from src.volume_sampler.release_volume_sampler import RecursiveReleaseAnalysis
-
-from src.displacements.displacements import displacement
-from src.utils.utils import create_dir
-from src.utils.logging import setup_logger
+from src.rvsampler.preprocess import preprocess, slope, aspect, compute_pixel_areas
+from src.rvsampler.slope_analysis import SlopeAnalysis
+from src.rvsampler.triangulate import Triangulation
+from src.rvsampler.cumprobs_by_triangle import caclulate_cummulative_probabilities
+from src.rvsampler.release_volume_sampler import RecursiveReleaseAnalysis
+from src.rvsampler.volume_writer import VolumeWriter
+from src.rvsampler.displacements import displacement
+from src.rvsampler.utils import create_dir
+from src.rvsampler.logging import setup_logger
 
 
 def main():
@@ -69,8 +68,8 @@ def main():
     # Run volume sampler
     sample_release_volumes(rundir) 
     
-    # Preselection of volumes.
-    # preselect_volumes(rundir, slopeunitsfile)
+    # Calculate volume statistics and write volumes to file
+    write(rundir)
     
 
 def run_preprocess(bathyfile, soilparamsfile, soilregionsfile, singularity_image, rundir, logfile, logger):
@@ -160,40 +159,30 @@ def sample_release_volumes(rundir):
     analysis.run(**run_config)
 
 
-def preselect_volumes(rundir, slopeunitsfile):
-    """ Not used in updated workflow.
+def write(rundir):
+    """ To ensure that module imports works, run the script as a module.
+    release-volume-sampler$ python -m src.volume_sampler.volume_writer
     """
-    volume_selection_dir = os.path.join(os.path.join(rundir, "volume_selection"))
-    create_dir(volume_selection_dir)
+    # Usage example
+    config = {
+        "rundir": rundir,
+    }
     
-    logpgas = np.log10([0.3, 0.6, 1.])
-    logdelta = np.log10(30.)
-    magnitude = 7.
-    probability_threshold = 0.5
+    filter_config = {
+        "tsunami_potential_ratio_threshold": 1.,
+        "max_rasters": 1000,
+    }
     
-    selection_criteria = []
-    logky = np.linspace(-5,1,200000)
-    for logpga in logpgas:
-        # Extract biggest yield acelleration with displacement larger than delta.
-        more_than_delta = displacement(logky=logky, logpga=logpga, M=magnitude)[0] > logdelta
-        root_logky = logky[more_than_delta][-1]
-        selection_criteria.append({"logky": root_logky, 
-                                   "delta": 10**logdelta, 
-                                   "pga": 10**logpga, 
-                                   "M":magnitude})
     
-    with open(os.path.join(volume_selection_dir, 'selection_criteria.json'), 'w') as f:
-        json.dump(selection_criteria, f, indent=4)
+    # Execute
+    writer = VolumeWriter(**config)
+    writer.write_volumes_to_csv()
+    writer.write_volumes_to_rasters(**filter_config)
     
-    # Extract areas using the Cummulative distribution of logky.
-    sa = SlopeAnalysis(rundir, slopefile="slope.tif")
-    sa.compute_cummulative([params["logky"] for params in selection_criteria], 
-                           feature_name="logky", 
-                           write=True, 
-                           output_dir=volume_selection_dir)
+    #writer.plot_distribution()
+    #writer.plot_release_density_plots()
     
-    # Loop through slopeunits and intersect with cumulative thresholds.
-
-
+    #writer.plot_distribution(seed_prob="p_shake")
+    #writer.plot_release_density_plots(seed_prob="p_shake")
 if __name__ == "__main__":
     main()

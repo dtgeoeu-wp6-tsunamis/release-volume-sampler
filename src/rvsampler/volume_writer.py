@@ -4,17 +4,20 @@ import rasterio
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from src.utils.logging import setup_logger
-from src.utils.utils import create_dir
 from scipy.signal import convolve2d
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.colors import LogNorm
 from scipy.interpolate import interp1d
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+
+from set_logg import setup_logger
+from utils import create_dir
 
 
 def main():
     """ To ensure that module imports works, run the script as a module.
-    release-volume-sampler$ python -m src.volume_sampler.volume_writer
+    release-volume-sampler$ python -m src.rvsampler.volume_writer
     """
     # Usage example
     config = {
@@ -29,17 +32,18 @@ def main():
     
     # Execute
     writer = VolumeWriter(**config)
-    writer.load_probabilities_from_shakemap(displacement_threshold=5., 
-                                            table_filename="exceedance_displacement.npz", 
-                                            name = "p_shake")
+    #writer.load_probabilities_from_shakemap(displacement_threshold=5., 
+    #                                        table_filename="exceedance_displacement.npz", 
+    #                                        name = "p_shake")
     
-    #writer.write_volumes_to_csv()
+    writer.write_volumes_to_csv()
     #writer.write_volumes_to_rasters(**filter_config)
+    
     #writer.plot_distribution()
     #writer.plot_release_density_plots()
     
-    writer.plot_distribution(seed_prob="p_shake")
-    writer.plot_release_density_plots(seed_prob="p_shake")
+    #writer.plot_distribution(seed_prob="p_shake")
+    #writer.plot_release_density_plots(seed_prob="p_shake")
     
 
 class VolumeWriter:
@@ -63,6 +67,8 @@ class VolumeWriter:
         with rasterio.open(self.tri_mask_path) as src:
             self.tri_mask = src.read(1)  # Read the triangle mask
             self.tri_profile = src.profile  # Copy metadata to use in output
+            self.bounds = src.bounds
+            self.crs = src.crs
         
         self.logger = setup_logger("volume_writer", self.output_dir)
         
@@ -133,8 +139,10 @@ class VolumeWriter:
     
     
     def write_volumes_to_csv(self, subset = None):
-        self.df.drop(columns=["released"]).to_csv(os.path.join(self.output_dir, "volumes.csv"),
-                                                  float_format="%.6e")
+        #self.df.drop(columns=["released"]).to_csv(os.path.join(self.output_dir, "volumes.csv"),
+        #                                          float_format="%.6e")
+        self.df.to_csv(os.path.join(self.output_dir, "volumes.csv"), float_format="%.6e")
+    
     
     
     def write_volumes_to_rasters(self, tsunami_potential_ratio_threshold=1., max_rasters=1000):
@@ -148,7 +156,7 @@ class VolumeWriter:
 
         # Update profile for single-band, unsigned 8-bit data
         tri_profile.update(dtype=rasterio.float32, count=1)
-        #tri_profile.update(driver="AAIGrid") # Write asci files.
+        tri_profile.update(driver="AAIGrid") # Write asci files.
         
         df_filtered = self.df[self.df.tsunami_potential_ratio > tsunami_potential_ratio_threshold]
         df_filtered = df_filtered.sort_values("tsunami_potential_ratio", ascending=False)
@@ -163,7 +171,7 @@ class VolumeWriter:
             
             # Smooth volume
             volume_raster = convolve2d(volume_mask.astype(float)*volume.thickness, np.ones((3,3))/9., mode="same")
-            volume_path = os.path.join(self.output_dir, f"rasters/volume_id-{volume.id}_seed-{volume.seed_triangle}_ratio-{volume.tsunami_potential_ratio:.2e}.tif")
+            volume_path = os.path.join(self.output_dir, f"rasters/volume_id-{volume.id}_seed-{volume.seed_triangle}_ratio-{volume.tsunami_potential_ratio:.2e}.asc")
 
             with rasterio.open(volume_path, 'w', **tri_profile) as dst:
                 dst.write(volume_raster.astype(rasterio.float32), 1)  # Write volume to file
@@ -188,13 +196,15 @@ class VolumeWriter:
         axes[0, 0].set_ylabel("Frequency")
         
         # Top-right: Weighted histogram of area
-        axes[0, 1].hist(self.df.area, bins=30, weights=probability, color="salmon", edgecolor="black")
+        axes[0, 1].hist(self.df.area, bins=30, weights=probability, color="salmon", edgecolor="black", density=True)
+        axes[0, 1].set_yscale('log', nonpositive='clip')
+        axes[0, 1].grid(which='major', axis='y')
         axes[0, 1].set_title("Weighted Area of Release")
         axes[0, 1].set_xlabel("Area")
         axes[0, 1].set_ylabel("Weighted Frequency")
 
         # Middle-left: Histogram of thickness
-        axes[1, 0].hist(self.df.thickness, bins=30, color="lightgreen", edgecolor="black")
+        axes[1, 0].hist(self.df.thickness, bins=30, color="skyblue", edgecolor="black")
         axes[1, 0].set_yscale('log', nonpositive='clip')
         axes[1, 0].grid(which='major', axis='y')
         axes[1, 0].set_title("Thickness of Release")
@@ -202,13 +212,15 @@ class VolumeWriter:
         axes[1, 0].set_ylabel("Frequency")
 
         # Middle-right: Weighted histogram of thickness
-        axes[1, 1].hist(self.df.thickness, bins=30, weights=probability, color="orange", edgecolor="black")
+        axes[1, 1].hist(self.df.thickness, bins=30, weights=probability, color="salmon", edgecolor="black", density=True)
+        axes[1, 1].set_yscale('log', nonpositive='clip')
+        axes[1, 1].grid(which='major', axis='y')
         axes[1, 1].set_title("Weighted Thickness of Release")
         axes[1, 1].set_xlabel("Thickness")
         axes[1, 1].set_ylabel("Weighted Frequency")
         
         # Bottom-left: Weighted histogram of area
-        axes[2, 0].hist(self.df.tsunami_potential_ratio, bins=30, color="salmon", edgecolor="black")
+        axes[2, 0].hist(self.df.tsunami_potential_ratio, bins=30, color="skyblue", edgecolor="black")
         axes[2, 0].set_yscale('log', nonpositive='clip')
         axes[2, 0].grid(which='major', axis='y')
         axes[2, 0].set_title("Tsunami Potential Ratio of Release")
@@ -216,8 +228,9 @@ class VolumeWriter:
         axes[2, 0].set_ylabel("Frequency")
 
         # Bottom-right: Weighted histogram of thickness
-        axes[2, 1].hist(self.df.tsunami_potential_ratio, bins=30, weights=probability, color="orange", edgecolor="black")
-        #axes[2, 1].set_yscale('log', nonpositive='clip')
+        axes[2, 1].hist(self.df.tsunami_potential_ratio, bins=30, weights=probability, color="salmon", edgecolor="black", density=True)
+        axes[2, 1].set_yscale('log', nonpositive='clip')
+        axes[2, 1].grid(which='major', axis='y')
         axes[2, 1].set_title("Weighted Tsunami Potential Ratio of Release")
         axes[2, 1].set_xlabel("Tsunami Potential Ratio")
         axes[2, 1].set_ylabel("Weighted Frequency")
@@ -248,12 +261,29 @@ class VolumeWriter:
                 self.logger.info(f"Aggregated triangles: {tri_index}") 
         probs_raster = 1. - probs_raster
         # Create subplots
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))  # 1 row, 2 columns of plots
+        
+         # Convert bounds to extent
+        extent = [self.bounds.left, self.bounds.right, self.bounds.bottom, self.bounds.top]
+
+        # Create a map with the raster CRS
+        if self.crs.is_geographic:
+            projection = ccrs.PlateCarree()
+        else:
+            projection = ccrs.epsg(self.crs.to_epsg())
+        
+        # Calculate tick values dynamically based on raster bounds
+        lon_ticks = np.linspace(self.bounds.left, self.bounds.right, num=5)  # 5 ticks along longitude
+        lat_ticks = np.linspace(self.bounds.bottom, self.bounds.top, num=5)  # 5 ticks along latitude
+        
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5), subplot_kw={'projection': projection})  # 1 row, 2 columns of plots
         fig.suptitle(f"Spatial distribution of release volumes - seed_prob: {seed_prob}", fontsize=16)
 
         # Plot the first raster
         counts_im = axes[0].imshow(
             counts_raster,
+            origin='upper',
+            extent=extent,
+            transform=projection,
             cmap="tab20b",
             norm=LogNorm(vmin=1, vmax=np.nanmax(counts_raster), clip=True),
         )
@@ -261,24 +291,38 @@ class VolumeWriter:
         # Plot the second raster
         prob_im = axes[1].imshow(
             probs_raster,
+            origin='upper',
+            extent=extent,
+            transform=projection,
             cmap="tab20b",
             norm=LogNorm(vmin=1e-6, vmax=1., clip=True),
         )
+        
+        # Add gridlines
+        for ax in axes:
+            gridlines = ax.gridlines(
+                draw_labels=True,  # Show labels on gridlines
+                xlocs=lon_ticks,  # X ticks (longitudes)
+                ylocs=lat_ticks,  # Y ticks (latitudes)
+                linewidth=0.5,
+                color='gray',
+                linestyle='--'
+            )
 
-        # Create colorbars with the same height as the subplots
-        # For the first axis
-        divider1 = make_axes_locatable(axes[0])
-        cax1 = divider1.append_axes("right", size="5%", pad=0.1)  # Adjust size and padding
-        fig.colorbar(counts_im, cax=cax1, label="Counts")
+            # Customize tick labels
+            gridlines.xlabel_style = {'size': 10, 'color': 'black'}
+            gridlines.ylabel_style = {'size': 10, 'color': 'black'}
 
-        # For the second axis
-        divider2 = make_axes_locatable(axes[1])
-        cax2 = divider2.append_axes("right", size="5%", pad=0.1)  # Adjust size and padding
-        fig.colorbar(prob_im, cax=cax2, label="Probability")
+            gridlines.right_labels = False
+
+        # Create colorbars
+        fig.colorbar(counts_im, ax=axes[0], label="Counts")
+        fig.colorbar(prob_im, ax=axes[1], label="Probability")
 
         # Adjust layout
         plt.tight_layout(rect=[0, 0, 1, 0.95])  # Leave space for the title
         plt.savefig(os.path.join(self.output_dir, f"release_distribution-{seed_prob}.png")) 
-
+        plt.close()
+        
 if __name__ == "__main__":
     main()

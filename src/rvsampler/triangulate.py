@@ -9,8 +9,8 @@ from pyproj import Transformer
 import matplotlib.cm as cm
 import os
 import meshio
-from src.utils.utils import create_dir
-from src.utils.logging import setup_logger
+from utils import create_dir
+from logging import setup_logger
 
 
 def main():

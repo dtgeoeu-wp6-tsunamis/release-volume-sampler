@@ -6,8 +6,8 @@ import numpy as np
 import json
 import argparse
 import logging
-from src.utils.utils import read_tif, create_dir
-from src.utils.logging import setup_logger
+from src.rvsampler.utils import read_tif, create_dir
+from src.rvsampler.logging import setup_logger
 import rasterio
 from rasterio.plot import show
 import cartopy.crs as ccrs

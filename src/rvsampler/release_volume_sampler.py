@@ -5,14 +5,13 @@ import os
 import json
 from itertools import product
 
-from src.utils.utils import create_dir
-from src.utils.logging import setup_logger
+from utils import create_dir
+from logging import setup_logger
 
 
 def main():
-    """ To ensure that modules are imports works, run the script as a module.
-    
-    release-volume-sampler$ python -m src/volume_sampler.release_volume_sampler
+    """ To ensure that modules are imports works, run the script as a module. 
+    release-volume-sampler$ python -m src.rvsampler.release_volume_sampler
     """
     # Usage example
     config = {
