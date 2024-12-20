@@ -5,11 +5,9 @@ import os
 import numpy as np
 import json
 import argparse
-import logging
-from src.rvsampler.utils import read_tif, create_dir
-from src.rvsampler.logging import setup_logger
+from rvsampler.utils import read_tif, create_dir
+from rvsampler.set_logg import setup_logger
 import rasterio
-from rasterio.plot import show
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from matplotlib.ticker import FuncFormatter
@@ -120,7 +118,7 @@ def plot_raster(working_dir, plot_dir, file, global_min, global_max, value, unit
          
 
     # Plot raster with Cartopy
-    fig, ax = plt.subplots(figsize=(12, 6), subplot_kw={'projection': projection})
+    fig, ax = plt.subplots(figsize=(12, 6), subplot_kw={'projection':projection})
     img = ax.imshow(
         data,
         origin='upper',

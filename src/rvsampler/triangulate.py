@@ -9,8 +9,8 @@ from pyproj import Transformer
 import matplotlib.cm as cm
 import os
 import meshio
-from utils import create_dir
-from logging import setup_logger
+from rvsampler.utils import create_dir
+from rvsampler.set_logg import setup_logger
 
 
 def main():
@@ -76,10 +76,8 @@ class Triangulation:
         self.eval_points  = tf.cast(all_eval_points[eval_point_is_boundary == 0], tf.float32) # remove boundary points
         self.true_elevations = tf.cast(self.target_elevation_function(self.eval_points), tf.float32)
 
-
     def triangle_is_interior(self):
         return(np.array([not all(self.triang_point_is_boundary[t]) for t in self.tri.simplices]))
-
 
     def target_elevation_function(self, points):
         eastings, northings = points[:, 0], points[:, 1]
@@ -95,7 +93,6 @@ class Triangulation:
         
         return tf.cast(np.nan_to_num(self.bathy[rows, cols]), tf.float32)  # Synthetic elevation function
     
-    
     def get_3d_vertices(self, tri_indices): 
         vertice_elevations = tf.reshape(self.target_elevation_function(self.vertices),[-1,1])
         vertices_3d = tf.concat([self.vertices, vertice_elevations], axis=1)
@@ -105,7 +102,6 @@ class Triangulation:
         p1, p2, p3 = p1_p2_p3[:,0,:], p1_p2_p3[:,1,:], p1_p2_p3[:,2,:]
         return(p1, p2, p3)
 
- 
     def evaluate_triangulated_elevation(self, points):
         """
         Evaluates the elevation of points based on the plane defined by the containing triangle's vertices.
@@ -144,7 +140,6 @@ class Triangulation:
         )
         return elevation
     
-    
     def compute_shape_loss(self):
         """
         Computes the shape loss based on the aspect ratio for all triangles,
@@ -182,7 +177,6 @@ class Triangulation:
 
         return shape_loss, area_loss
     
-    
     def create_batches(self, batch_size):
         """Create batches from the evaluation points."""
         epoch=0
@@ -193,7 +187,6 @@ class Triangulation:
             for i in range(0, len(self.eval_points), batch_size):
                 batch_indices = indices[i:i+batch_size]
                 yield batch_indices
-    
     
     def fit(self, num_iterations, batch_size, shape_weight, area_weight, elevation_weight):
         # 4. Optimization Loop
@@ -233,7 +226,6 @@ Area loss: {area_weight*area_loss.numpy():.10e}
 """
                 self.logger.info(print_str)
     
-    
     def create_points(self, dims=None):
         # Construct pixel indices
         nr_of_rows, nr_of_cols = (self.rows, self.cols) if dims is None else dims
@@ -266,12 +258,10 @@ Area loss: {area_weight*area_loss.numpy():.10e}
 
         return points, point_is_boundary
 
-
     def lonlat_to_meters(self, lon, lat):
         transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{self.UTM_epsg_code}", always_xy=True)
         x, y = transformer.transform(lon, lat)
         return x, y
-
 
     def plot_triangulation(self, output_file="triangulation.png"):
         """
@@ -320,21 +310,15 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         plt.close(fig)  # Close figure after saving to avoid display if running in a notebook
         self.logger.info(f"Plot saved to {output_file}")
 
-
     def write_to_file(self, vtkfile="triangulation.vtk", rasterfile='triangulation.tif'):
         """
         Write triangulation to files.
         """
-        # Write to mesh.
-        cells = [
-                    ("triangle", self.tri.simplices),
-                ]
-            
-        # Convert meters to lonlat
         transformer = Transformer.from_crs(f"EPSG:{self.UTM_epsg_code}" ,"EPSG:4326" , always_xy=True)
         eastings, northings = self.vertices[:,0].numpy(), self.vertices[:,1].numpy()
         lons, lats = transformer.transform(eastings, northings)
         elevations = self.target_elevation_function(self.vertices).numpy()
+        cells = [("triangle", self.tri.simplices)]
         
         mesh = meshio.Mesh(
                 np.vstack([lons, lats, elevations]).T,
@@ -354,15 +338,12 @@ Area loss: {area_weight*area_loss.numpy():.10e}
 
         # Write to raster:
         row_indices, col_indices = np.meshgrid(np.arange(self.src.height), np.arange(self.src.width), indexing='ij')
-        
         lons, lats = rasterio.transform.xy(self.src.transform, row_indices, col_indices)
         lons, lats = np.array(lons), np.array(lats)
-        
         eastings, northings = self.lonlat_to_meters(lons, lats)
 
         # Find the triangle containing each point
         simplexes = self.tri.find_simplex(np.vstack([eastings.flatten(), northings.flatten()]).T)  # Index of triangle containing each point
-        
         rasterfile_out = os.path.join(self.output_dir, rasterfile)
         self.logger.info(f"Writes triangulation to: {rasterfile_out}")
         with rasterio.open(rasterfile_out,'w', **self.src.profile) as dst:

@@ -4,22 +4,18 @@ import json
 from scipy.interpolate import RegularGridInterpolator
 import csv
 
-from utils import create_dir, read_tif, write_tif, cummulative, write_content
-from logging import setup_logger
+from rvsampler.utils import create_dir, write_tif, cumulative, write_content
+from rvsampler.set_logg import setup_logger
 
 class ShakemapsAggregator:
     
-    def __init__(self, shakemaps_filename, source_parameters_filename, thresholds, rundir, shake_value):
+    def __init__(self, shakemaps_filename, source_parameters_filename, rundir):
         
-        # Parameters
         self.shakemaps_filename = shakemaps_filename
         self.source_parameters_filename = source_parameters_filename
-        self.thresholds = thresholds
         self.shakemaps_out_dir = os.path.join(rundir, "shakemaps")
         self.logger = setup_logger("shakemaps_aggregator", self.shakemaps_out_dir)
-        self.shake_value = shake_value
          
-        # Load source parameters
         self.source_parameters = []
         with open(self.source_parameters_filename, newline='') as csvfile:
             reader = csv.DictReader(csvfile)
@@ -28,17 +24,16 @@ class ShakemapsAggregator:
         
         self.weights = np.ones(len(self.source_parameters))/len(self.source_parameters)
         
-        # Compute cummulative probabilities.
-        self.shakemap_cummulative = self.compute_cummulative()
-
-
-    def write_cummulative(self, profile, bounds, interpolation_method):
+    def compute_cumulative(self, profile, bounds, interpolation_method, thresholds, shake_value):
         create_dir(self.shakemaps_out_dir)
         
+        # Compute cumulative probabilities.
+        shakemap_cumulative = self.cumulative_shakemap(thresholds, shake_value)
+        
         shakemap_content = []
-        for i, threshold in enumerate(self.thresholds):
-            logpga = self.interpolate_shakemap(shakemaps=self.shakemap_cummulative,
-                                               shake_value="cummulative", 
+        for i, threshold in enumerate(thresholds):
+            logpga = self.interpolate_shakemap(shakemaps=shakemap_cumulative,
+                                               shake_value="cumulative", 
                                                shake_sample=i, 
                                                bbox=bounds, 
                                                n_cols=profile["width"], 
@@ -55,24 +50,22 @@ class ShakemapsAggregator:
             write_tif(os.path.join(self.shakemaps_out_dir, filename), logpga, profile, self.logger)
         write_content(shakemap_content, self.shakemaps_out_dir)
     
-    
-    def compute_cummulative(self):
+    def cumulative_shakemap(self, thresholds, shake_value):
         # Compute cumulative probability of given value over entire shakemap grid. Save in same structure as input file.
         # Load shakemaps from file 
-        shakemaps_cummulative =  []
+        shakemaps_cumulative =  []
         with open(self.shakemaps_filename, 'r') as f:
             shakemaps = json.load(f)
         
         for _,point in shakemaps.items():
-            shakemaps_cummulative.append(
+            shakemaps_cumulative.append(
                 {
                     "lon": point["lon"],
                     "lat": point["lat"],
-                    "cummulative": cummulative(self.shake_value["function"](point), self.thresholds, self.weights)
+                    "cumulative": cumulative(shake_value(point), thresholds, self.weights)
                 }
             )
-        return(shakemaps_cummulative)
-
+        return(shakemaps_cumulative)
     
     def interpolate_shakemap(self, shakemaps, shake_value, shake_sample, bbox, n_rows, n_cols, interpolation_method):
         # Create grid interpolator

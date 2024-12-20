@@ -2,10 +2,10 @@ import os
 import subprocess
 import numpy as np
 import rasterio
-import shutil
+from rvsampler.utils import read_tif, write_tif, temporary_working_directory, log_process
 
-from utils import read_tif, write_tif, temporary_working_directory, log_process
-from logging import setup_logger
+""" Collection of preprocessing steps.
+"""
 
 MAX_PROCS_PER_DEM = 8
 
@@ -32,7 +32,6 @@ def truncate_positive_values(working_dir, singularity_image, infile, logfile):
     completed_proc.check_returncode()  # raise CalledProcessError if return code is non-zero.
     log_process(completed_proc, logfile)
     return(outfile)
-
 
 def slope(infile, output_dir, logfile, working_dir=None):
     """Slope
@@ -69,7 +68,6 @@ def slope(infile, output_dir, logfile, working_dir=None):
     log_process(completed_proc, logfile)
     return(outfile)
 
-
 def aspect(infile, output_dir, logfile, working_dir = None):
     """Aspect
         Description:
@@ -102,7 +100,6 @@ def aspect(infile, output_dir, logfile, working_dir = None):
     log_process(completed_proc, logfile)
     return(outfile)
 
-
 def surface_area_ratio(infile, output_dir, logfile, working_dir = None):
     """SurfaceAreaRatio
         Description:
@@ -134,7 +131,6 @@ def surface_area_ratio(infile, output_dir, logfile, working_dir = None):
     log_process(completed_proc, logfile)
     return(outfile)
 
-
 def project_bathy(working_dir, infile, singularity_image, map_projection_epsg, logfile):
     """
     Reproject raster using gdalwarp.
@@ -158,7 +154,6 @@ def project_bathy(working_dir, infile, singularity_image, map_projection_epsg, l
     completed_proc.check_returncode()  # raise CalledProcessError if return code is non-zero.
     log_process(completed_proc, logfile)
     return(outfile)
-
 
 def compute_pixel_areas(working_dir, bathy_file, slope_file, logger):
     with temporary_working_directory(working_dir) :
@@ -192,28 +187,3 @@ def compute_pixel_areas(working_dir, bathy_file, slope_file, logger):
             pixel_areas = pixel_width_m * pixel_height_m * area_scale_factor
             write_tif(output_file, pixel_areas, src.profile, logger)
         return(output_file)
-
-
-def preprocess(bathymetry, singularity_image, output_dir, logfile, logger, map_projection_epsg=None, working_dir=None):
-    """
-    Preprocessing steps before running calculations.
-    """
-    infile = bathymetry
-    outfile = "bathy"
-    
-    # Assert that the raster is in a geographic (lon-lat) coordinate system
-    logger.info("Verifying that input bathymetri is logitude-latitude.")
-    with rasterio.open(bathymetry) as src:
-        assert src.crs.is_geographic, "The raster is not in a longitude-latitude coordinate system (geographic CRS)."
-
-    if working_dir is None: working_dir = output_dir
-    logger.info(f"Copy {bathymetry} to {output_dir}.")
-    shutil.copy(bathymetry, os.path.join(output_dir, f"{outfile}.tif"))
-
-    # Reproject bathymetry
-    if map_projection_epsg is not None:
-        outfile = project_bathy(working_dir, outfile, singularity_image, map_projection_epsg, logfile)
-    
-    # Truncate values on shore.
-    outfile = truncate_positive_values(working_dir, singularity_image, outfile, logfile) 
-    return(f"{outfile}.tif")

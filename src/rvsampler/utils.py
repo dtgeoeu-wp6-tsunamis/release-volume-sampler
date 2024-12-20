@@ -17,13 +17,11 @@ def read_tif(fname, logger=None):
         profile = src.profile.copy()
     return data, msk, profile
 
-
 def write_tif(fname, data, profile, logger=None):
     "Write .tif data and profile using rasterio."
     if logger: logger.info(f"Write file: {fname}")
     with rasterio.open(fname, 'w', **profile) as dst:
         dst.write(data, 1)
-
 
 def create_dir(dir_name, logger = None, clear=False):
     if clear and os.path.exists(dir_name):
@@ -42,20 +40,17 @@ def create_dir(dir_name, logger = None, clear=False):
         except OSError as e:
             sys.exit(f"Can't create {dir_name}: {e}")
 
-
 def log_process(completed_process, log_file):
         with open(log_file, 'a') as log:
             log.write("Process args: {}\n".format(" ".join(completed_process.args)))
             # If Python version > 3.7 replace with shlex.join (better formatting in logfile).
             log.write("Process stdout: {}\n".format(completed_process.stdout.decode("utf-8")))
 
-
 def write_content(content, output_dir):
     with open(os.path.join(output_dir, 'content.json'), 'w') as f:
         json.dump(content, f, indent=4)
 
-
-def cummulative(samples, xs, weights=None, axis=-1):
+def cumulative(samples, xs, weights=None, axis=-1):
     """
     Get the cumulative probability of a list of weighted samples.
 
@@ -86,9 +81,8 @@ def cummulative(samples, xs, weights=None, axis=-1):
     #return(np.vstack([cumsum_weights[i, np.sum(sorted_samples < x, axis=-1)] for i,x in enumerate(xs)]))
     
     # Using np.average
-    cummulative = np.vstack([np.average(samples < x, weights=weights, axis=axis) for x in xs])
-    return(np.nan_to_num(cummulative))
-
+    cumulative = np.vstack([np.average(samples < x, weights=weights, axis=axis) for x in xs])
+    return(np.nan_to_num(cumulative))
 
 @contextmanager
 def temporary_working_directory(path):

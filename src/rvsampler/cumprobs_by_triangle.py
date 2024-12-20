@@ -3,34 +3,32 @@ import json
 import os
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from utils import read_tif
-from logging import setup_logger
+from rvsampler.utils import read_tif
+from rvsampler.set_logg import setup_logger
 
 def main():
-    """ To ensure that modules are imports works, run the script as a module.
-    
-    release-volume-sampler$ python -m src.triangulation.cumprobs_by_triangle
+    """ This proceedure creates lookuptables from cumulative distributions for the triangulation.
     """
-    # Cummulative probabilities for FOS
+    # cumulative probabilities for FOS
     rundir = "/home/ebr/projects/release-volume-sampler/generated/messina_001"
     params = {
         "rundir": rundir,
-        "cummulative_dir": os.path.join(rundir, "slope_analysis", "fos", "cummulative"),
-        "outfile_name": "cummulative_fos.npz"
+        "cumulative_dir": os.path.join(rundir, "slope_analysis", "fos", "cumulative"),
+        "outfile_name": "cumulative_fos.npz"
     }
-    caclulate_cummulative_probabilities(**params)
+    #caclulate_cumulative_probabilities(**params)
     
     # Exceedance probabilities for displacement.
     params = {
         "rundir": rundir,
-        "cummulative_dir": os.path.join(rundir, "displacements"),
+        "cumulative_dir": os.path.join(rundir, "displacements"),
         "outfile_name": "exceedance_displacement.npz"
     }
     
-    #caclulate_cummulative_probabilities(**params)
+    caclulate_cumulative_probabilities(**params)
 
 
-def caclulate_cummulative_probabilities(rundir, cummulative_dir, outfile_name):
+def caclulate_cumulative_probabilities(rundir, cumulative_dir, outfile_name):
     """ Creates lookup table.
     """
     
@@ -47,8 +45,8 @@ def caclulate_cummulative_probabilities(rundir, cummulative_dir, outfile_name):
     n_triangles = int(tri_mask.max()) + 1
     logger.info(f"Number of triangles: {n_triangles}.")
     
-    logger.info(f"Loads cummulative probabilities from {cummulative_dir}")
-    with open(os.path.join(cummulative_dir, "content.json"),'r') as f:
+    logger.info(f"Loads cumulative probabilities from {cumulative_dir}")
+    with open(os.path.join(cumulative_dir, "content.json"),'r') as f:
         content = json.load(f)
 
     triangle_probs = np.empty((n_triangles, len(content)))
@@ -56,7 +54,7 @@ def caclulate_cummulative_probabilities(rundir, cummulative_dir, outfile_name):
     
     # Parallel execution
     def process_raster(raster_index, e):
-        raster_path = os.path.join(cummulative_dir, e["file"])
+        raster_path = os.path.join(cumulative_dir, e["file"])
         logger.info(f"Process raster: {raster_path}")
         raster_data, msk, profile = read_tif(raster_path, logger)
         

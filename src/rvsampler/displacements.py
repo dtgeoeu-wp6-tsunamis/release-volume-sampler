@@ -2,8 +2,8 @@ import numpy as np
 import os
 import json
 
-from utils import create_dir, read_tif, write_tif, write_content 
-from logging import setup_logger
+from rvsampler.utils import create_dir, read_tif, write_tif, write_content 
+from rvsampler.set_logg import setup_logger
 
 """ Cacluation of displacements probabilities from yield acceleration and shakemaps.
 """
@@ -55,7 +55,7 @@ class DisplacementProbabilityAggregator:
         self.rundir = rundir
         self.displacement_thresholds = displacement_thresholds
         
-        self.ky_dir = os.path.join(rundir, "slope_analysis", "yield_acceleration", "cummulative")
+        self.ky_dir = os.path.join(rundir, "slope_analysis", "yield_acceleration", "cumulative")
         self.pga_dir = os.path.join(rundir, "shakemaps")
         self.magnitude = magnitude # Used for calculation of displacement. Ideally be embedded as a distribution, but not very sensitive.
 
@@ -69,11 +69,11 @@ class DisplacementProbabilityAggregator:
         
         # Load and compute probability densities.
         self.logger.info(f"Loads cumulative probabilities: {self.ky_dir}")
-        cummulative_ky, ky_thresholds, profile = self.load_cummulative(self.ky_dir)
+        cumulative_ky, ky_thresholds, profile = self.load_cumulative(self.ky_dir)
         self.logger.info(f"Loads cumulative probabilities: {self.pga_dir}")
-        cummulative_pga, pga_thresholds, profile = self.load_cummulative(self.pga_dir)
-        ky_density = np.diff(cummulative_ky, axis=0)
-        pga_density = np.diff(cummulative_pga, axis=0)
+        cumulative_pga, pga_thresholds, profile = self.load_cumulative(self.pga_dir)
+        ky_density = np.diff(cumulative_ky, axis=0)
+        pga_density = np.diff(cumulative_pga, axis=0)
         
 
         # Compute displacement at grid centers
@@ -102,7 +102,7 @@ class DisplacementProbabilityAggregator:
         write_content(content, self.output_dir)
 
 
-    def load_cummulative(self, dir):
+    def load_cumulative(self, dir):
         # load json file
         with open(os.path.join(dir, "content.json"),'r') as f:
             content = json.load(f)

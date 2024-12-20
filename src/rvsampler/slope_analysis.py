@@ -2,8 +2,8 @@ import numpy as np
 import os
 import json
 
-from utils import read_tif, write_tif, create_dir, cummulative
-from logging import setup_logger
+from rvsampler.utils import read_tif, write_tif, create_dir, cumulative
+from rvsampler.set_logg import setup_logger
 
 
 class SlopeAnalysis:
@@ -104,7 +104,6 @@ class SlopeAnalysis:
             self.weights.append(np.array(weights))
             self.region_masks.append(region_mask)
         
-    
     def compute_quantiles(self, quantiles, write_fos=False, write_ky=False):
         """
         Compute quantiles of the factor of safety and the yield acceleration.
@@ -159,8 +158,7 @@ class SlopeAnalysis:
         if write_fos: self.write_content(fos_output, fos_quantile_dir)
         if write_ky: self.write_content(ky_output, ky_quantile_dir)
     
-    
-    def compute_cummulative(self, thresholds, feature_name="logfos", write=False, output_dir=None):
+    def compute_cumulative(self, thresholds, feature_name="logfos", write=False, output_dir=None):
         if feature_name == "logfos":
             feature = self.foss
             dir = self.fos_dir if output_dir is None else output_dir
@@ -170,57 +168,31 @@ class SlopeAnalysis:
         else:
             raise ValueError("feature name must be either logfos of logky.")
         
-        feature_cummulative = [cummulative(feature[region], thresholds, weights=self.weights[region], axis=0) for region,_ in enumerate(self.soilparameters)]
+        feature_cumulative = [cumulative(feature[region], thresholds, weights=self.weights[region], axis=0) for region,_ in enumerate(self.soilparameters)]
         
         if write:
             output = []
             create_dir(dir, self.logger) # dir
-            cum_dir = os.path.join(dir, "cummulative")
+            cum_dir = os.path.join(dir, "cumulative")
             create_dir(cum_dir, self.logger)
         
-            # Evaluate cummulative by interpolation and write to files.
+            # Evaluate cumulative by interpolation and write to files.
             for i, threshold in enumerate(thresholds):
-                cummulative_filename = f"{feature_name}_cum_{i}.tif"
-                cummulative_raster = np.empty(self.slope_data.shape)
-                cummulative_raster[~self.slope_msk] = np.nan
+                cumulative_filename = f"{feature_name}_cum_{i}.tif"
+                cumulative_raster = np.empty(self.slope_data.shape)
+                cumulative_raster[~self.slope_msk] = np.nan
                 for region,_ in enumerate(self.soilparameters):
-                    cummulative_raster[self.region_masks[region]] = np.interp(self.slope_data[self.region_masks[region]], self.slopes[region], feature_cummulative[region][i,:])
-                write_tif(fname = os.path.join(cum_dir, cummulative_filename), data = cummulative_raster, profile = self.slope_profile, logger=self.logger)
-                output.append({"file": cummulative_filename, "threshold":threshold, "value": f"cummulative of {feature_name}", "scale": "", "unit": ""})
+                    cumulative_raster[self.region_masks[region]] = np.interp(self.slope_data[self.region_masks[region]], self.slopes[region], feature_cumulative[region][i,:])
+                write_tif(fname = os.path.join(cum_dir, cumulative_filename), data = cumulative_raster, profile = self.slope_profile, logger=self.logger)
+                output.append({"file": cumulative_filename, "threshold":threshold, "value": f"cumulative of {feature_name}", "scale": "", "unit": ""})
             
             self.write_content(output, cum_dir)
-        return(feature_cummulative)
-    
-    """
-    def compute_cummulative_ky(self, thresholds, write_ky=True):
-        # Lookup table
-        ky_cummulative = cummulative(self.kys, thresholds, weights=self.weights, axis=0)
-        
-        if write_ky:
-            ky_output = []
-            create_dir(self.yield_acceleration_dir)
-            ky_cum_dir = os.path.join(self.yield_acceleration_dir, "cummulative")
-            create_dir(ky_cum_dir)
-            
-            # Evaluate cummulative by interpolation and write to files.
-            for i, threshold in enumerate(thresholds):
-                ky_cummulative_filename = f"ky_cum_{i}.tif"
-                ky_cummulative_flat = np.interp(self.slope_data[self.slope_msk], self.slopes, ky_cummulative[i,:])
-                ky_cummulative_raster = np.empty(self.slope_data.shape)
-                ky_cummulative_raster[self.slope_msk] = ky_cummulative_flat
-                ky_cummulative_raster[~self.slope_msk] = np.nan
-                write_tif(fname = os.path.join(ky_cum_dir, ky_cummulative_filename), data = ky_cummulative_raster, profile = self.slope_profile)
-                ky_output.append({"file": ky_cummulative_filename, "threshold":threshold, "value": "probability", "scale": "", "unit": "g"})
-            
-            self.write_content(ky_output, ky_cum_dir)
-        return(ky_cummulative)
-    """
+        return(feature_cumulative)
     
     def write_content(self, content, output_dir):
         with open(os.path.join(output_dir, 'content.json'), 'w') as f:
             json.dump(content, f, indent=4)
         
-    
     @staticmethod
     def infinite_slope_analysis(slope, friction_angle, cohesion, thickness, density, density_of_water = 1000, gravity = 9.81, excess_pore_pressure = 0., yield_angle = None, eps=0.001):
         """
@@ -306,7 +278,6 @@ class Node():
             self.create_children()
         else:
             self.leaf_nodes.append(self)
-
 
     def create_children(self):
         # Select first parameter not already created
