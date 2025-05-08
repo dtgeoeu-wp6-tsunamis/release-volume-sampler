@@ -23,7 +23,8 @@ SUFFIX_MAP = {
 COLUMN_NAMES = ['id', 'released', 'condprob',
            'area', 'mean_elevation', 'mean_slope', 
            'seed_triangle', 'p_fos_seed', 'volume', 
-           'thickness', 'tsunami_potential_ratio']
+           'thickness', 'tsunami_potential_ratio',
+           'no2d']
 
 # Schema for the "volumes" table
 VOLUMES_SCHEMA = {
@@ -37,7 +38,8 @@ VOLUMES_SCHEMA = {
     "p_fos_seed": "REAL",
     "volume": "REAL",
     "thickness": "REAL",
-    "tsunami_potential_ratio": "REAL"
+    "tsunami_potential_ratio": "REAL",
+    "no2d": "REAL"
 }
 
 def main():
@@ -51,7 +53,7 @@ def main():
     
     filter_config = {
         "tsunami_potential_ratio_threshold": 1.,
-        "max_rasters": 1000,
+        "max_rasters": 10,
     }
     
     
@@ -61,7 +63,7 @@ def main():
                                                     table_filename="exceedance_displacement.npz", 
                                                     column_name = "p_shake")
     
-        volumes_db.write_volumes_to_csv()
+        volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
         volumes_db.write_volumes_to_rasters(**filter_config)
         
         #volumes_db.plot_distribution()
@@ -88,6 +90,7 @@ class VolumeDatabaseHandler:
         self.output_dir = os.path.join(rundir, "volumes")
         self.triangulation_dir = os.path.join(rundir, "triangulation")
         self.tri_mask_path = os.path.join(self.triangulation_dir, "triangulation.tif")
+        self.upstream_dict_path = os.path.join(self.triangulation_dir,"poly_slopes.npy")
         self.db_file = os.path.join(self.output_dir, db_file)
         
         # Create volumes dir if it does not exist
@@ -98,16 +101,27 @@ class VolumeDatabaseHandler:
             self.tri_profile = src.profile  # Copy metadata to use in output
             self.bounds = src.bounds
             self.crs = src.crs
+            
+            # Create lat/lon also, this might be defined somewhere else also which 
+            # might make this obsolete
+            transform = src.transform 
+            height, width = self.tri_mask.shape
+            # Create a grid of pixel coordinates
+            cols, rows = np.meshgrid(np.arange(width), np.arange(height))
+            # Apply the affine transform to get x and y (lon/lat or projected coords)
+            self.lon_tri, self.lat_tri = transform * (cols, rows)
         
         self.logger = setup_logger("db_handler", self.output_dir)
         self.conn = None
         self.cursor = None
+        
 
 
     def initialize_db(self):
         """
         Initialize the SQLite database and table if they don't exist.
         """
+        
         try:
             columns = ", ".join(f"{name} {type_}" for name, type_ in VOLUMES_SCHEMA.items())
             create_table_sql = f"CREATE TABLE IF NOT EXISTS volumes ({columns});"
@@ -139,15 +153,15 @@ class VolumeDatabaseHandler:
             volume_data (dict): A dictionary containing 'volume' and 'location'.
         """
         try:
-            volume, thickness, tsunami_potential_ratio = self.calculate_volume_features(volume_data["area"], 
+            volume, thickness, tsunami_potential_ratio, no2d = self.calculate_volume_features(volume_data["area"], 
                                                                                         volume_data["mean_slope"],
                                                                                         volume_data["mean_elevation"])
             self.cursor.execute("""
                 INSERT INTO volumes (
                     released, condprob, area, mean_elevation, mean_slope,
-                    seed_triangle, p_fos_seed, volume, thickness, tsunami_potential_ratio
+                    seed_triangle, p_fos_seed, volume, thickness, tsunami_potential_ratio, no2d
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 json.dumps(volume_data["released"]),  # Serialize list to JSON
                 volume_data["condprob"],
@@ -158,7 +172,8 @@ class VolumeDatabaseHandler:
                 volume_data["p_fos_seed"],
                 volume,
                 thickness,
-                tsunami_potential_ratio
+                tsunami_potential_ratio,
+                no2d
             ))
             self.conn.commit()
         except Exception as e:
@@ -182,7 +197,13 @@ class VolumeDatabaseHandler:
         volume = 0.0298*area**1.36
         thickness = volume/area
         tsunami_potential_ratio = volume/(0.0957*(mean_slope**-1.609)*((0-mean_elevation)**1.3807)*1e6)
-        return(volume, thickness, tsunami_potential_ratio)
+        
+        # no2d
+        L = np.sqrt(area) # Asume A = L*L
+        mean_slope_rad = mean_slope*np.pi/180
+        no2d = 0.2139*thickness*(1-0.7458*np.sin(mean_slope_rad)+0.1704*(np.sin(mean_slope_rad))**2)*(L*np.sin(mean_slope_rad)/(0-mean_elevation))**(5/4)
+        
+        return(volume, thickness, tsunami_potential_ratio, no2d)
     
 
     def load_probabilities_from_shakemap(self, displacement_threshold, table_filename, column_name = "p_shake"):
@@ -213,15 +234,21 @@ class VolumeDatabaseHandler:
 
         # Ensure that new 'probability' column does not overwrite standard columns and commit.
         if column_name not in VOLUMES_SCHEMA.keys():
-            self.cursor.execute(f"ALTER TABLE volumes ADD COLUMN {column_name} REAL")
-            self.logger.info("Added 'probability' column to the table.")
-            self.cursor.executemany(f"UPDATE volumes SET {column_name} = ? WHERE id = ?", updates)
-            self.conn.commit()
+            
+            # Added try so that the code can be rerun when it has crashed without having to delete everything and
+            # start over.
+            try:
+                self.cursor.execute(f"ALTER TABLE volumes ADD COLUMN {column_name} REAL")
+                self.logger.info("Added 'probability' column to the table.")
+                self.cursor.executemany(f"UPDATE volumes SET {column_name} = ? WHERE id = ?", updates)
+                self.conn.commit()
+            except:
+                print('database error!!!! Probably overwrite!')
         else:
             self.logger.error("Unable to update table: Illegal column name {column_name}.")
         
     
-    def write_volumes_to_csv(self):
+    def write_volumes_to_csv(self, max_rasters=100):
         #self.df.drop(columns=["released"]).to_csv(os.path.join(self.output_dir, "volumes.csv"),
         #                                          float_format="%.6e")
         csv_filename = os.path.join(self.output_dir, "volumes.csv")
@@ -231,18 +258,30 @@ class VolumeDatabaseHandler:
         
         # Get the first row to determine the header (fieldnames)
         first_row = next(row_generator)
+        fieldnames = list(first_row.keys()) + ['LONLO', 'LONHI', 'LATLO', 'LATHI']
         
+        upstream_dict = np.load(self.upstream_dict_path, allow_pickle=True).item()
+        
+       
         # Open the CSV file for writing
         with open(csv_filename, mode='w', newline='') as file:
-            writer = csv.DictWriter(file, fieldnames=first_row.keys())
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
             
             # Write the header (column names)
             writer.writeheader()
             
-            # Write the rows one by one
-            writer.writerow(first_row)  # Write the first row
-            for row in row_generator:
-                row.pop("released")
+            # Write the first row
+            LONLO, LONHI, LATLO, LATHI = self.Bingclaw_gridsize(first_row, upstream_dict)
+            first_row.update({'LONLO': LONLO, 'LONHI': LONHI, 'LATLO': LATLO, 'LATHI': LATHI})
+            first_row.pop("released", None)
+            writer.writerow(first_row)
+            for i,row in enumerate(row_generator):
+                
+                # The calculations are not very fast, so avoid doing this for all volumes.
+                if i < max_rasters: 
+                    LONLO, LONHI, LATLO, LATHI = self.Bingclaw_gridsize(row, upstream_dict)
+                    row.update({'LONLO': LONLO, 'LONHI': LONHI, 'LATLO': LATLO, 'LATHI': LATHI})
+                row.pop("released", None)
                 writer.writerow(row)
 
 
@@ -272,6 +311,9 @@ class VolumeDatabaseHandler:
         tri_profile.update(dtype=rasterio.float32, count=1)
         tri_profile.update(driver=raster_driver)
         
+        # Laste inn upstream_dict
+        
+        
         for i, volume in enumerate(self.fetch_volumes_ordered()):
             # Create binary volume mask: 1 if pixel belongs to specified triangles, else 0
             volume_mask = np.isin(tri_mask, volume["released"])
@@ -280,11 +322,72 @@ class VolumeDatabaseHandler:
             volume_raster = convolve2d(volume_mask.astype(float)*volume["thickness"], np.ones((3,3))/9., mode="same")
             volume_path = os.path.join(self.output_dir, 
                                        f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}_ratio-{volume["tsunami_potential_ratio"]:.2e}{SUFFIX_MAP[raster_driver]}')
+            
+            # Here a bounding box for
+            # LONLO, LONHI, LATLO, LATHI = Bingclaw_gridsize(volume)
+            # For now write the boundaries to a txt file
+            #BG_grid_path = os.path.join(self.output_dir, 
+            #                           f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}_ratio-{volume["tsunami_potential_ratio"]:.2e}{'txt'}')
+            #with open(BG_grid_path, "w") as f:
+            #    f.write("LONLO,LONHI,LATLO,LATHI\n")
+            #    f.write(f"{LONLO},{LONHI},{LATLO},{LATHI}\n")
 
             with rasterio.open(volume_path, 'w', **tri_profile) as dst:
                 dst.write(volume_raster.astype(rasterio.float32), 1)  # Write volume to file
             self.logger.info(f"Wrote volume raster:{volume_path}")
+
+            
+            
             if i >= max_rasters or tsunami_potential_ratio_threshold > volume["tsunami_potential_ratio"] : break
+
+    def Bingclaw_gridsize(self, volume, upstream_dict):
+        """ 
+        Calculate boundaing box for bingclaw simulations. 
+        Calculations are based on polygons made from upstream triangles. All polygons covering the 
+        the seed triangle is used to define the extent of the simulation grid.
+        """
+        
+        # Find all polygons in the upstream_dict that covers the seed triangle
+        matching_keys = [k for k, v in upstream_dict.items() if volume["seed_triangle"] in v]
+        # Merge all polygons into one
+        merged = np.concatenate([upstream_dict[k] for k in matching_keys])
+        # Find all unique triangles from the polygons
+        unique_merged = np.unique(merged)
+        # Get a mask og triangles
+        mask = np.isin(self.tri_mask, unique_merged)
+        # Get the coordinates of the triangles
+        temp_lon = self.lon_tri[mask]
+        temp_lat = self.lat_tri[mask]
+
+        # Compute corners
+        lat_min, lat_max = temp_lat.min(), temp_lat.max()
+        lon_min, lon_max = temp_lon.min(), temp_lon.max()
+
+        dx = lon_max - lon_min
+        dy = lat_max - lat_min
+
+        # Add some extra space outside the polygons 
+        xextra = [0, max(0, 0.1 - dx), max(0, 0.15 - dx)]
+        yextra = [0, max(0, 0.1 - dy), max(0, 0.15 - dy)]
+
+        xe = xextra[1]
+        ye = yextra[1]
+        # This hardcoded and suboptimal, but works for this excat case, but should
+        # be updated in the future
+        if lon_max > 15.6:
+            #xcoords = [lon_min - xe, lon_min - xe, lon_max, lon_max]
+            LONLO = lon_min - xe
+            LONHI = lon_max
+        else:
+            #xcoords = [lon_min, lon_min, lon_max + xe, lon_max + xe]
+            LONLO = lon_min
+            LONHI = lon_max + xe
+        #ycoords = [lat_min - ye, lat_max, lat_max, lat_min - ye]
+        LATHI = lat_max
+        LATLO = lat_min - ye
+            
+        return LONLO, LONHI, LATLO, LATHI
+        
 
     
     def plot_distribution(self, seed_prob="p_fos_seed"):

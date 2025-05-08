@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import rasterio
+import argparse
 
 from rvsampler.displacements import DisplacementProbabilityAggregator
 from rvsampler.shakemaps_reader import ShakemapsAggregator
@@ -12,27 +13,33 @@ from rvsampler.database_handler import VolumeDatabaseHandler
 def main():
     """This script assigns release probabilities to the release volumes in the database.
     """
-    project_dir = "/home/ebr/projects/release-volume-sampler"
-    rundir =  os.path.join(project_dir, "generated/messina_002")
+    # Rundir tas inn som input
+    parser = argparse.ArgumentParser(description="Release volume sampler")
+    parser.add_argument('--rundir', required=True, help='Path to the run directory')
+    parser.add_argument('--resdir', required=True, help='Path to the results directory')
+    args = parser.parse_args()
+    rundir = args.rundir
+    resdir = args.resdir
+    
     shakemaps_params = {
-        "shakemaps_filename": os.path.join(project_dir, "input/shakemaps/messina_1908/predicted_data_NN_Messina_1908.json"),
-        "source_parameters_filename": os.path.join(project_dir, "input/shakemaps/messina_1908/source_parameters.csv")
+        "shakemaps_filename": os.path.join(rundir, "input/shakemaps/messina_1908/predicted_data_NN_Messina_1908.json"),
+        "source_parameters_filename": os.path.join(rundir, "input/shakemaps/messina_1908/source_parameters.csv")
     }
     displacements_exceedance_params = {
-        "cumulative_dir": os.path.join(rundir, "displacements"),
+        "cumulative_dir": os.path.join(resdir, "displacements"),
         "outfile_name": "exceedance_displacement.npz"
     }
     
-    aggregate_shakemaps(rundir, **shakemaps_params)
-    calculate_displacement_probabilities(rundir)
-    caclulate_cumulative_probabilities(rundir, **displacements_exceedance_params)
+    aggregate_shakemaps(resdir, **shakemaps_params)
+    calculate_displacement_probabilities(resdir)
+    caclulate_cumulative_probabilities(resdir, **displacements_exceedance_params)
     
     filter_config = {
         "tsunami_potential_ratio_threshold": 1.,
         "max_rasters": 1000,
     }
      
-    with VolumeDatabaseHandler(rundir) as volumes_db:
+    with VolumeDatabaseHandler(resdir) as volumes_db:
         volumes_db.load_probabilities_from_shakemap(displacement_threshold=5., 
                                                     table_filename="exceedance_displacement.npz", 
                                                     column_name = "p_shake")

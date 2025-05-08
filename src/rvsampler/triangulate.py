@@ -19,7 +19,7 @@ def main():
     release-volume-sampler$ python -m src.triangulation.triangulate
     """
     config = {
-        "rundir": "/home/ebr/projects/release-volume-sampler/generated/messina_001",
+        "rundir": "/home/sfr/release-volume-sampler/generated/messina_001",
         "bathyfile": "bathy_truncated.tif",
         "utm_epsg_code": 32633, #Messina strait
         "resolution": (120, 120)
@@ -131,7 +131,7 @@ class Triangulation:
 
         # Compute the elevation (z) for each point (x, y)
         elevation_valid = -(a * valid_points[:, 0] + b * valid_points[:, 1] + d) / c
-
+ 
         # Use tf.scatter_nd to create the full elevation tensor
         elevation = tf.scatter_nd(
             indices=tf.where(simplex_is_valid),
@@ -250,6 +250,10 @@ Area loss: {area_weight*area_loss.numpy():.10e}
 
         mask_boundary = is_raster_boundary & mask | mask_buff & ~mask
         mask_interior = mask & ~mask_boundary
+
+        # Added by SFR 24.04.25
+        mask_boundary = mask_boundary.flatten()
+        mask_interior = mask_interior.flatten()
 
         interior_points = np.vstack([eastings[mask_interior], northings[mask_interior]]).T
         boundary_points = np.vstack([eastings[mask_boundary], northings[mask_boundary]]).T

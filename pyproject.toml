@@ -1,10 +1,10 @@
 [tool.poetry]
 name = "release-volume-sampler"
-version = "0.1.0"
+version = "0.1.1"
+packages = [{ include = "rvsampler", from = "src" }]
 description = "Module designed to sample potential submarine release volumes triggered by earthquakes."
 authors = ["Erlend Briseid Storrøsten <erlend.briseid.storrosten@ngi.no>"]
 readme = "README.md"
-package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.11"

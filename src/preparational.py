@@ -2,6 +2,7 @@ import os
 import numpy as np
 import shutil
 import rasterio
+import argparse
 
 # Import from modules.
 from rvsampler.preprocess import truncate_positive_values, slope, aspect
@@ -18,14 +19,20 @@ def main():
     """
     This script creates the database with potential release volumes.
     """
-    inputfolder = "/home/ebr/projects/release-volume-sampler/input"
+    # Rundir tas inn som input
+    parser = argparse.ArgumentParser(description="Release volume sampler")
+    parser.add_argument('--rundir', required=True, help='Path to the run directory')
+    args = parser.parse_args()
+    rundir = args.rundir
+    
+    #inputfolder = rundir + "input"
     config = {
-        "generated": "/home/ebr/projects/release-volume-sampler/generated", 
-        "scenario":"messina_002",
-        "singularity_image": "/home/ebr/projects/release-volume-sampler/images/grass.sif",
-        "bathyfile": os.path.join(inputfolder, "bathy/localMessinaBathy.tif"),
-        "soilregions_filename": os.path.join(inputfolder, "soilparams/regions.tif"),
-        "soil_parameters_filename": os.path.join(inputfolder, "soilparams/params.json"),
+        "generated": os.path.join(rundir,"generated"), 
+        "scenario":"messina_001",
+        "singularity_image": os.path.join(rundir,"images/grass.sif"),
+        "bathyfile": os.path.join(rundir,'input', "bathy/messina_001/localMessinaBathy.tif"),
+        "soilregions_filename": os.path.join(rundir,'input', 'soilparams','regions.tif'),
+        "soil_parameters_filename": os.path.join(rundir,'input', 'soilparams','params.json'),
     }
     
     rundir = initialize(**config)
@@ -138,7 +145,39 @@ def sample_release_volumes(rundir):
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)
+    # make slope polygons and save to file for use in operational.py
+    poly_slopes(rundir, analysis)
+    
     analysis.run(**run_config)
+      
+def poly_slopes(rundir, analysis):
+    # list of all triangles
+    utriangles = np.arange(analysis.n_triangles)
+    
+    upstream_dict = {}
+    while len(utriangles) > 0:
+        #print(len(utriangles))
+        tlist = get_all_upstream(utriangles[0],-1,analysis)
+        upstream_dict[utriangles[0]] = tlist
+        # remove those found from the list
+        for i in tlist:
+            utriangles = np.delete(utriangles, np.where(utriangles == i))
+    
+    np.save(os.path.join(rundir, "triangulation", "poly_slopes.npy"), upstream_dict)
+  
+def get_all_upstream(start, last, analysis, collected=None):
+    # Calculate all upstream triangles for given start triangle
+    
+    if collected is None:
+        collected = []
+    if start is not None and start not in collected and start > -1:  # avoid duplicates or infinite loops
+        collected.append(start)
+        #print('#######' + str(start)+'##########' + str(last))
+        upstream = analysis.get_upstream_triangles(start)
+        for i in upstream:
+            collected = get_all_upstream(i, start, analysis, collected)
+
+    return collected
 
 
 if __name__ == "__main__":
