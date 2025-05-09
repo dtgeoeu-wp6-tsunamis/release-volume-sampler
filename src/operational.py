@@ -36,7 +36,7 @@ def main():
     
     filter_config = {
         "tsunami_potential_ratio_threshold": 1.,
-        "max_rasters": 1000,
+        "max_rasters": 10,
     }
      
     with VolumeDatabaseHandler(resdir) as volumes_db:
@@ -44,7 +44,7 @@ def main():
                                                     table_filename="exceedance_displacement.npz", 
                                                     column_name = "p_shake")
     
-        volumes_db.write_volumes_to_csv()
+        volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
         volumes_db.write_volumes_to_rasters(**filter_config)
         
         #volumes_db.plot_distribution()

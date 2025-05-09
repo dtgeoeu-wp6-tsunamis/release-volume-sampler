@@ -63,6 +63,7 @@ def main():
                                                     table_filename="exceedance_displacement.npz", 
                                                     column_name = "p_shake")
     
+
         volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
         volumes_db.write_volumes_to_rasters(**filter_config)
         
@@ -273,7 +274,9 @@ class VolumeDatabaseHandler:
             # Write the first row
             LONLO, LONHI, LATLO, LATHI = self.Bingclaw_gridsize(first_row, upstream_dict)
             first_row.update({'LONLO': LONLO, 'LONHI': LONHI, 'LATLO': LATLO, 'LATHI': LATHI})
-            first_row.pop("released", None)
+            #first_row.pop("released", None)
+            # Alternatively the list can be convert to a string
+            first_row["released"] = json.dumps(first_row["released"])
             writer.writerow(first_row)
             for i,row in enumerate(row_generator):
                 
@@ -292,63 +295,76 @@ class VolumeDatabaseHandler:
     def fetch_volumes_ordered(self):
         """ Generator to fetch volumes ordered by tsunami_potential_ratio.
         """
-        self.cursor.execute("""
-            SELECT * FROM volumes
-            ORDER BY tsunami_potential_ratio DESC
-        """)
-        
-        # Should be quite similar to sort these two, but the latter seems more correct as it just uses the elevation.
         #self.cursor.execute("""
         #    SELECT * FROM volumes
-        #    ORDER BY no2d DESC
+        #    ORDER BY tsunami_potential_ratio DESC
         #""")
+        
+        # Should be quite similar to sort these two, but the latter seems more correct as it just uses the elevation.
+        self.cursor.execute("""
+            SELECT * FROM volumes
+            ORDER BY no2d DESC
+        """)
         for row in self.cursor:
             row_dict = dict(row)
             row_dict["released"] = json.loads(row_dict["released"])
             yield row_dict
     
     
-    def write_volumes_to_rasters(self, tsunami_potential_ratio_threshold=1., max_rasters=100, raster_driver="GTiff"):
-        """ Write csv with all volumes. Volumes are sorted according to tsunami_potential_ratio_threshold.
-        """
+    def write_volumes_to_rasters(self, tsunami_potential_ratio_threshold=1., max_rasters=100, raster_driver="GTiff", crop=True):
+        """Write rasters of volumes, optionally cropped to extent of each volume (non-zero region)."""
         rasterdir = os.path.join(self.output_dir, "rasters")
         create_dir(rasterdir, logger=self.logger, clear=True)
+
         with rasterio.open(self.tri_mask_path) as src:
-            tri_mask = src.read(1)  # Read the triangle mask
-            tri_profile = src.profile  # Copy metadata to use in output
+            tri_mask = src.read(1)
+            tri_profile = src.profile
 
-        # Update profile for single-band, unsigned 8-bit data
-        tri_profile.update(dtype=rasterio.float32, count=1)
-        tri_profile.update(driver=raster_driver)
-        
-        # Laste inn upstream_dict
-        
-        
+        tri_profile.update(dtype=rasterio.float32, count=1, driver=raster_driver)
+
         for i, volume in enumerate(self.fetch_volumes_ordered()):
-            # Create binary volume mask: 1 if pixel belongs to specified triangles, else 0
             volume_mask = np.isin(tri_mask, volume["released"])
-            
-            # Smooth volume
-            volume_raster = convolve2d(volume_mask.astype(float)*volume["thickness"], np.ones((3,3))/9., mode="same")
-            volume_path = os.path.join(self.output_dir, 
-                                    f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}_ratio-{volume["tsunami_potential_ratio"]:.2e}{SUFFIX_MAP[raster_driver]}')
-            
-            # Here a bounding box for
-            # LONLO, LONHI, LATLO, LATHI = Bingclaw_gridsize(volume)
-            # For now write the boundaries to a txt file
-            #BG_grid_path = os.path.join(self.output_dir, 
-            #                           f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}_ratio-{volume["tsunami_potential_ratio"]:.2e}{'txt'}')
-            #with open(BG_grid_path, "w") as f:
-            #    f.write("LONLO,LONHI,LATLO,LATHI\n")
-            #    f.write(f"{LONLO},{LONHI},{LATLO},{LATHI}\n")
+            volume_raster = convolve2d(volume_mask.astype(float) * volume["thickness"], np.ones((3, 3)) / 9., mode="same")
+            #print(i, max_rasters)
+            if crop:
+                nonzero = np.nonzero(volume_raster)
+                if nonzero[0].size == 0 or nonzero[1].size == 0:
+                    continue  # Skip empty volumes
 
-            with rasterio.open(volume_path, 'w', **tri_profile) as dst:
-                dst.write(volume_raster.astype(rasterio.float32), 1)  # Write volume to file
-            self.logger.info(f"Wrote volume raster:{volume_path}")
+                row_min, row_max = nonzero[0].min(), nonzero[0].max()
+                col_min, col_max = nonzero[1].min(), nonzero[1].max()
 
-            
-            
-            if i >= max_rasters or tsunami_potential_ratio_threshold > volume["tsunami_potential_ratio"] : break
+                pad = 10
+                row_min = max(row_min - pad, 0)
+                row_max = min(row_max + pad, volume_raster.shape[0])
+                col_min = max(col_min - pad, 0)
+                col_max = min(col_max + pad, volume_raster.shape[1])
+
+                cropped_raster = volume_raster[row_min:row_max, col_min:col_max]
+                cropped_transform = tri_profile["transform"] * rasterio.Affine.translation(col_min, row_min)
+
+                profile = tri_profile.copy()
+                profile.update({
+                    "height": cropped_raster.shape[0],
+                    "width": cropped_raster.shape[1],
+                    "transform": cropped_transform
+                })
+            else:
+                cropped_raster = volume_raster
+                profile = tri_profile
+
+            volume_path = os.path.join(
+                self.output_dir,
+                f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}_ratio-{volume["tsunami_potential_ratio"]:.2e}{SUFFIX_MAP[raster_driver]}'
+            )
+
+            with rasterio.open(volume_path, 'w', **profile) as dst:
+                dst.write(cropped_raster.astype(rasterio.float32), 1)
+            self.logger.info(f"Wrote volume raster: {volume_path}")
+
+            if i >= max_rasters or tsunami_potential_ratio_threshold > volume["tsunami_potential_ratio"]:
+                break
+
 
     def Bingclaw_gridsize(self, volume, upstream_dict):
         """ 
