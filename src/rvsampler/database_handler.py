@@ -281,8 +281,12 @@ class VolumeDatabaseHandler:
                 if i < max_rasters: 
                     LONLO, LONHI, LATLO, LATHI = self.Bingclaw_gridsize(row, upstream_dict)
                     row.update({'LONLO': LONLO, 'LONHI': LONHI, 'LATLO': LATLO, 'LATHI': LATHI})
-                row.pop("released", None)
+                # Including a list in a csv can be a bit messy, so a simple solutions is to just remove it
+                #row.pop("released", None)
+                # Alternatively the list can be convert to a string
+                row["released"] = json.dumps(row["released"])
                 writer.writerow(row)
+                
 
 
     def fetch_volumes_ordered(self):
@@ -292,6 +296,12 @@ class VolumeDatabaseHandler:
             SELECT * FROM volumes
             ORDER BY tsunami_potential_ratio DESC
         """)
+        
+        # Should be quite similar to sort these two, but the latter seems more correct as it just uses the elevation.
+        #self.cursor.execute("""
+        #    SELECT * FROM volumes
+        #    ORDER BY no2d DESC
+        #""")
         for row in self.cursor:
             row_dict = dict(row)
             row_dict["released"] = json.loads(row_dict["released"])
@@ -321,7 +331,7 @@ class VolumeDatabaseHandler:
             # Smooth volume
             volume_raster = convolve2d(volume_mask.astype(float)*volume["thickness"], np.ones((3,3))/9., mode="same")
             volume_path = os.path.join(self.output_dir, 
-                                       f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}_ratio-{volume["tsunami_potential_ratio"]:.2e}{SUFFIX_MAP[raster_driver]}')
+                                    f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}_ratio-{volume["tsunami_potential_ratio"]:.2e}{SUFFIX_MAP[raster_driver]}')
             
             # Here a bounding box for
             # LONLO, LONHI, LATLO, LATHI = Bingclaw_gridsize(volume)
