@@ -170,6 +170,20 @@ class RecursiveReleaseAnalysis:
         released_is_downstream = self.grads[upstream_triangles][self.neighbours[upstream_triangles] == released_triangle] < 0
         upstream_is_interior = self.is_interior[upstream_triangles]
         return upstream_triangles[released_is_downstream & upstream_is_interior].astype(int)
+    
+    def haversine(lat1, lon1, lat2, lon2):
+        R = 6371.0  # Earth radius in kilometers
+
+        # Convert degrees to radians
+        lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+
+        a = np.sin(dlat / 2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0)**2
+        c = 2 * np.arcsin(np.sqrt(a))
+
+        return R * c  # Distance in km
    
     def run(self, seed_triangle_probability_threshold, fos_threshold, recursive_probability_threshold):
         
@@ -187,7 +201,36 @@ class RecursiveReleaseAnalysis:
         all_triangles = np.arange(self.n_triangles)
         seed_probability = np.array([self.get_cumulative_logfos(triangle, np.log10(Release.fos_threshold)) for triangle in all_triangles])
         seed_triangles = all_triangles[np.logical_and(seed_probability > seed_triangle_probability_threshold, seed_probability != 9999.0)]
+        #seed_triangles = all_triangles[np.logical_and(seed_probability > 3e-1, seed_probability != 9999.0)]
+        print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+        print(len(seed_triangles))
+        print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+        #trast
+        
         self.logger.info(f"Found {len(seed_triangles)} seed triangles.")
+        
+        # Also calculate seed triangle pairs
+        st_pairs = set()
+        
+        # Coordinates
+        points = np.vstack([self.easting, self.northing]).T
+
+        #p1 = points[self.triangles][:,0,:]
+        #p2 = points[self.triangles][:,1,:]
+        #p3 = points[self.triangles][:,2,:]
+
+        for ist, ss in enumerate(seed_triangles):
+            distances = np.linalg.norm(points[self.triangles[ss]] - points[self.triangles[seed_triangles]], axis=1)
+            
+            within_1km_indices = np.where(distances <= 500)[0]
+            
+            for i in seed_triangles[within_1km_indices]:
+                other = i
+                if ss != other:  # remove self-pairs
+                    pair = tuple(sorted((ss, other)))  # sort to handle (a,b) == (b,a)
+                    st_pairs.add(pair)
+        
+        
        
         with VolumeDatabaseHandler(self.rundir) as volumes_db:
             for seed_triangle in seed_triangles:
@@ -205,7 +248,30 @@ class RecursiveReleaseAnalysis:
                     volume["mean_elevation"] = float(self.elevation[self.triangles[volume["released"]].flatten()].mean()) # Elevation is point data.
                     volume["mean_slope"] = self.slopes[volume["released"]].mean()
                     volume["seed_triangle"] = int(seed_triangle)
+                    volume["seed_triangle2"] = -1
                     volume["p_fos_seed"] = seed_probability[seed_triangle]
+                
+                # Add volumes to database
+                for volume in volumes:
+                    volumes_db.insert_volume(volume_data=volume)
+                  
+            for pair in st_pairs:
+                volumes = []
+                # Initiate recursion for the given seed.
+                pair2 = [int(x) for x in pair]
+                release = Release(triangulation=self, released=pair2, released_at_step = [0], probability = 1., step = 1)
+                
+                # traverse the released volumes.
+                release.write_release(volumes)
+                
+                # Append features
+                for volume in volumes:
+                    volume["area"] = self.areas[volume["released"]].sum()
+                    volume["mean_elevation"] = float(self.elevation[self.triangles[volume["released"]].flatten()].mean()) # Elevation is point data.
+                    volume["mean_slope"] = self.slopes[volume["released"]].mean()
+                    volume["seed_triangle"] = int(pair2[0])#", ".join(str(x) for x in pair2)
+                    volume["seed_triangle2"] = int(pair2[1])#", ".join(str(x) for x in pair2)
+                    volume["p_fos_seed"] = seed_probability[pair2[0]]*seed_probability[pair2[1]]
                 
                 # Add volumes to database
                 for volume in volumes:
