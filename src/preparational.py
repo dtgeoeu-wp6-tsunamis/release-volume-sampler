@@ -25,6 +25,9 @@ def main():
     args = parser.parse_args()
     rundir = args.rundir
     
+    # --rundir /home/sfr/release-volume-sampler
+    #rundir = r'/home/sfr/release-volume-sampler'
+    
     #inputfolder = rundir + "input"
     config = {
         "generated": os.path.join(rundir,"generated"), 
@@ -37,8 +40,8 @@ def main():
     
     rundir = initialize(**config)
     
-    #execute_slope_analysis(rundir)
-    #triangulate_domain(rundir)
+    execute_slope_analysis(rundir)
+    triangulate_domain(rundir)
     sample_release_volumes(rundir) 
 
     
@@ -145,7 +148,8 @@ def sample_release_volumes(rundir):
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)
-    # make slope polygons and save to file for use in operational.py
+    # make slope polygons and save to file for use in operational.py - this is used for evaluating possible 
+    # slide scenarios and can be used for making the computational grid for bingclaw
     poly_slopes(rundir, analysis)
     
     analysis.run(**run_config)

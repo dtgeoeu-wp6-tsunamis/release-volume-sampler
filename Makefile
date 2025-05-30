@@ -9,7 +9,7 @@ RESDIR ?= $(RUNDIR)/generated/messina_001
 # Multistep proceedures - Parameters set in python scripts
 volumes:
 	@echo " Execute slope analysis and sample volumes..."
-	poetry run python src/preparational.py --rundir $(RUNDIR)
+	nohup poetry run python src/preparational.py --rundir $(RUNDIR) > output.log 2>&1 &
 
 probabilities:
 	@echo " Assign probabilities to volumes..."

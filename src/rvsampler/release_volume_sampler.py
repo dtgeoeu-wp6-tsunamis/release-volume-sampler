@@ -89,6 +89,12 @@ class RecursiveReleaseAnalysis:
         
         self.logger.info(" Calculating triangle normals, sides and areas.") # Has to be executed in correct order.
         self.normals, self.sides, self.areas, self.slopes = self._compute_triangle_properties()
+        # A0 definert som middel trekant størrelse
+        # Litt usikker på om det er en god definisjon at denne endrer seg med n_triangles. Det vil si at hvis man har mange flere 
+        # å mindre trinagler så endres ikke sannsyneligheten.
+        #self.A0 = np.sum(self.areas)/self.n_triangles
+        # Use 200000 as this is approximately the result of the above calculation for the default run of the script.
+        self.A0 = 200000
         self.logger.info(" Compute boundary normals and gradients.") 
         self.side_normals = self._compute_side_normals()
         self.grads = self.calculate_boundary_gradients()
@@ -157,7 +163,8 @@ class RecursiveReleaseAnalysis:
         for triangle in triangles:
             neighbors_in_release = [t in released_volume for t in self.neighbours[triangle]]
             delta = self.sides[triangle][neighbors_in_release].sum() / self.sides[triangle].sum()
-            probability_of_release = self.get_cumulative_logfos(triangle, np.log10(fos_threshold) - np.log10(1-delta))
+            probability_of_release = np.exp(np.log(self.get_cumulative_logfos(triangle, np.log10(fos_threshold) 
+                                        - np.log10(1-delta)))*(self.areas[triangle]/self.A0))
             probs.append(probability_of_release)
         return np.array(probs)
 
@@ -202,9 +209,9 @@ class RecursiveReleaseAnalysis:
         seed_probability = np.array([self.get_cumulative_logfos(triangle, np.log10(Release.fos_threshold)) for triangle in all_triangles])
         seed_triangles = all_triangles[np.logical_and(seed_probability > seed_triangle_probability_threshold, seed_probability != 9999.0)]
         #seed_triangles = all_triangles[np.logical_and(seed_probability > 3e-1, seed_probability != 9999.0)]
-        print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
-        print(len(seed_triangles))
-        print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+        #print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+        #print(len(seed_triangles))
+        #print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
         #trast
         
         self.logger.info(f"Found {len(seed_triangles)} seed triangles.")
