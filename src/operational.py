@@ -6,6 +6,7 @@ import argparse
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from scipy.spatial.distance import cdist
+from scipy.interpolate import interp1d
 
 from rvsampler.displacements import DisplacementProbabilityAggregator
 from rvsampler.shakemaps_reader import ShakemapsAggregator
@@ -35,40 +36,132 @@ def main():
         "outfile_name": "exceedance_displacement.npz"
     }
     
-    aggregate_shakemaps(resdir, **shakemaps_params)
-    calculate_displacement_probabilities(resdir)
-    caclulate_cumulative_probabilities(resdir, **displacements_exceedance_params)
+    #aggregate_shakemaps(resdir, **shakemaps_params)
+    #calculate_displacement_probabilities(resdir)
+    #caclulate_cumulative_probabilities(resdir, **displacements_exceedance_params)
     
     filter_config = {
         "tsunami_potential_ratio_threshold": 1.,
         "max_rasters": 10,
-        "raster_driver": 'AAIGrid',
+        "raster_driver": 'Gtiff', # Gtiff/AAIGrid
     }
-     
-    with VolumeDatabaseHandler(resdir) as volumes_db:
-        volumes_db.load_probabilities_from_shakemap(displacement_threshold=5., 
-                                                    table_filename="exceedance_displacement.npz", 
-                                                    column_name = "p_shake")
     
-        volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
-        volumes_db.write_volumes_to_rasters(**filter_config)
-        
-        #volumes_db.plot_distribution()
-        #volumes_db.plot_release_density_plots()
-        
-        volumes_db.plot_distribution(seed_prob="p_shake")
-        volumes_db.plot_release_density_plots(seed_prob="p_shake")
+    # Lage csv med shakemap probabilities og regne ut sannsynelighet for alle
+    # volumer og clustere for hvert shakemap
+    prob_filename = os.path.join(resdir, 'triangulation', "exceedance_displacement.npz")
+    probs = load_probabilities(displacement_threshold=5., table_filename=prob_filename)
+    
+    volumes_file = os.path.join(resdir, 'volumes','Volumes2.csv')
+    cluster_file = os.path.join(resdir, 'volumes','Clusters.csv')
+    
+    cluster_probabilities(probs, volumes_file, cluster_file,resdir)
+    
+    
+     
+    # Move this to preparational script
+    #with VolumeDatabaseHandler(resdir) as volumes_db:
+    #    volumes_db.load_probabilities_from_shakemap(displacement_threshold=5., 
+    #                                                table_filename="exceedance_displacement.npz", 
+    #                                                column_name = "p_shake")
+   # 
+   #     volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
+    #    volumes_db.write_volumes_to_rasters(**filter_config)
+    #    
+    #    #volumes_db.plot_distribution()
+    #    #volumes_db.plot_release_density_plots()
+    #    
+    #    volumes_db.plot_distribution(seed_prob="p_shake")
+    #    volumes_db.plot_release_density_plots(seed_prob="p_shake")
         
     # Cluster the volumes into n_clusters, use the csv for now, but might be faster to use the already
     # opened db?
-    volumes_csv = os.path.join(resdir, 'volumes', "volumes.csv")
-    tri_tif = os.path.join(resdir, 'triangulation', "triangulation.tif")
-    bath_tif = os.path.join(rundir, 'input', 'bathy', 'messina_001', "bathy_truncated.tif")
-    upstream_dict_path = os.path.join(resdir, 'triangulation',"poly_slopes.npy")
+    #volumes_csv = os.path.join(resdir, 'volumes', "volumes.csv")
+    #tri_tif = os.path.join(resdir, 'triangulation', "triangulation.tif")
+    #bath_tif = os.path.join(rundir, 'input', 'bathy', 'messina_001', "bathy_truncated.tif")
+    #upstream_dict_path = os.path.join(resdir, 'triangulation',"poly_slopes.npy")
 
-    cluster_volumes(volumes_csv, tri_tif, bath_tif, resdir, upstream_dict_path)
+    #cluster_volumes(volumes_csv, tri_tif, bath_tif, resdir, upstream_dict_path)
+
+def cluster_probabilities(probabilities, volumes_file, cluster_file, resdir):
+    df_full = pd.read_csv(volumes_file)
+    df_cluster = pd.read_csv(cluster_file)
+    
+    # This method uses only the volumes with single seed!!!!!!!!!!#######
+    # For the other method se below
+    # Unique clusters and seeds from the full dataset
+    all_clusters = np.arange(df_full['cluster'].max() + 1)
+    all_seeds = np.unique(df_full['seed_triangle'])
+
+    # Filter only rows with seed_triangle2 == -1
+    filtered = df_full[df_full['seed_triangle2'] == -1]
+
+    # Group by cluster and seed_triangle, then sum condprob
+    grouped = filtered.groupby(['cluster', 'seed_triangle'])['condprob'].sum().reset_index()
+
+    # Pivot to 2D array, then reindex to ensure full dimensions
+    pivot = grouped.pivot(index='cluster', columns='seed_triangle', values='condprob')
+
+    # Reindex to fill in missing clusters and seeds with zeros
+    pivot = pivot.reindex(index=all_clusters, columns=all_seeds, fill_value=0)
+
+    # Convert to NumPy array
+    all_probs = pivot.to_numpy()
+    cluster_ids = pivot.index.to_numpy()
+    seed_ids = pivot.columns.to_numpy()
+    all_probs2 = all_probs * probabilities[seed_ids][np.newaxis, :]
+
+    df_cluster['prob1'] = np.nansum(all_probs2,axis=1)
+    
+    # This method assumes that all unique seed triangle combinations are their own tree
+    # Pre-allocate result array
+    Pc2 = np.zeros(500)
+
+    # Extract only needed columns as arrays for speed
+    seed1 = df_full['seed_triangle'].values
+    seed2 = df_full['seed_triangle2'].values
+    cluster = df_full['cluster'].values
+    condprob = df_full['condprob'].values
+
+    # Loop through clusters
+    for cin in range(500):
+        # Filter rows for this cluster
+        mask = cluster == cin
+        seed_matrix = np.column_stack((seed1[mask], seed2[mask]))
+        condprob_c = condprob[mask]
+
+        # Get unique combinations and inverse indices
+        unique_combinations, inverse_idx = np.unique(seed_matrix, axis=0, return_inverse=True)
+
+        # Sum condprob for each unique seed pair
+        prob_sums = np.zeros(len(unique_combinations))
+        np.add.at(prob_sums, inverse_idx, condprob_c)
+
+        # Compute weighted contribution
+        for i, (s1, s2) in enumerate(unique_combinations):
+            p1 = probabilities[s1]
+            p2 = probabilities[s2] if s2 > -1 else 1
+            Pc2[cin] += prob_sums[i] * p1 * p2
+    df_cluster['prob2'] = Pc2
+    
+    # Egentlig cluster_file, men siden jeg driver å tester trenger jeg ikke skrive over foreløpig
+    cluster_file2 = os.path.join(resdir, 'volumes','Clusters2.csv')
+    df_cluster.to_csv(cluster_file2, index=False)
+    
+    
     
 
+def load_probabilities(displacement_threshold=5., table_filename="exceedance_displacement.npz"):
+    diplacement_exceedance = np.load(table_filename)
+    thresholds, exceedance_probs = diplacement_exceedance["thresholds"], diplacement_exceedance["probs"]
+    interpolator = interp1d(x=thresholds, y=exceedance_probs, fill_value=(1.,0.), bounds_error=True)
+    probabilities = interpolator(displacement_threshold)
+    probabilities[probabilities == 9999] = 0
+    
+    return probabilities
+
+
+ 
+# Denne er også flyttet så kan slettes!!
 def cluster_volumes(volfile, trifile, bathfile, resdir, upstream_dict_path):
     df_vol = pd.read_csv(volfile)
     # Read triangles

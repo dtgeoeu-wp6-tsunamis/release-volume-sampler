@@ -78,7 +78,7 @@ def main():
 #SFR 26.05.2025, Moved this function out of write_volumes_to_rasters so it can be used for writing the
 # rasters from the cluster
 def write_raster(volume, tri_mask, tri_profile, resdir, raster_driver="AAIGrid", crop=True):
-    volume_mask = np.isin(tri_mask, volume["released"])
+    volume_mask = np.isin(tri_mask, json.loads(volume["released"]))
     volume_raster = convolve2d(volume_mask.astype(float) * volume["thickness"], np.ones((3, 3)) / 9., mode="same")
     #print(i, max_rasters)
     if crop:
@@ -113,6 +113,14 @@ def write_raster(volume, tri_mask, tri_profile, resdir, raster_driver="AAIGrid",
         resdir,
         f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}-{volume["seed_triangle2"]}{SUFFIX_MAP[raster_driver]}'
     )
+    
+    # Set nodata value
+    profile.update({
+    "driver": raster_driver,
+    "dtype": rasterio.float32,
+    "count": 1,
+    "nodata": -9999  # Set your NoData value here
+    })
 
     #print(f"Writing to: {volume_path}")
     #print(f"Profile: {profile}")
@@ -427,7 +435,7 @@ class VolumeDatabaseHandler:
         tri_profile.update(dtype=rasterio.float32, count=1, driver=raster_driver)
 
         for i, volume in enumerate(self.fetch_volumes_ordered()):
-            write_raster(volume, tri_mask, tri_profile, self.output_dir, raster_driver="GTiff", crop=True)
+            write_raster(volume, tri_mask, tri_profile, self.output_dir, raster_driver=raster_driver, crop=True)
             #volume_mask = np.isin(tri_mask, volume["released"])
             #volume_raster = convolve2d(volume_mask.astype(float) * volume["thickness"], np.ones((3, 3)) / 9., mode="same")
             #print(i, max_rasters)
