@@ -16,13 +16,15 @@ class ShakemapsAggregator:
         self.shakemaps_out_dir = os.path.join(rundir, "shakemaps")
         self.logger = setup_logger("shakemaps_aggregator", self.shakemaps_out_dir)
          
-        self.source_parameters = []
-        with open(self.source_parameters_filename, newline='') as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                self.source_parameters.append(row)
+        self.weights = None 
+        # Use with old messina data, but not really neccessary 
+        #self.source_parameters = []
+        #with open(self.source_parameters_filename, newline='') as csvfile:
+        #    reader = csv.DictReader(csvfile)
+        #    for row in reader:
+        #        self.source_parameters.append(row)
         
-        self.weights = np.ones(len(self.source_parameters))/len(self.source_parameters)
+        #self.weights = np.ones(len(self.source_parameters))/len(self.source_parameters)
         
     def compute_cumulative(self, profile, bounds, interpolation_method, thresholds, shake_value):
         create_dir(self.shakemaps_out_dir)
@@ -57,7 +59,7 @@ class ShakemapsAggregator:
         with open(self.shakemaps_filename, 'r') as f:
             shakemaps = json.load(f)
         
-        for _,point in shakemaps.items():
+        for point in shakemaps:
             shakemaps_cumulative.append(
                 {
                     "lon": point["lon"],
@@ -65,6 +67,16 @@ class ShakemapsAggregator:
                     "cumulative": cumulative(shake_value(point), thresholds, self.weights)
                 }
             )
+        
+        # This is for the old shakemap file
+        #for _,point in shakemaps.items():
+        #    shakemaps_cumulative.append(
+        #        {
+        #            "lon": point["lon"],
+        #            "lat": point["lat"],
+        #            "cumulative": cumulative(shake_value(point), thresholds, self.weights)
+        #        }
+        #    )
         return(shakemaps_cumulative)
     
     def interpolate_shakemap(self, shakemaps, shake_value, shake_sample, bbox, n_rows, n_cols, interpolation_method):

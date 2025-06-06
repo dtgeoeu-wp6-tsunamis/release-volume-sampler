@@ -50,22 +50,22 @@ def main():
         "raster_driver": 'AAIGrid', # Gtiff/AAIGrid
     }
         
-    #execute_slope_analysis(resdir)
-    #triangulate_domain(resdir)
-    #sample_release_volumes(resdir) 
+    execute_slope_analysis(resdir)
+    triangulate_domain(resdir)
+    sample_release_volumes(resdir) 
     
     # Write the volumes to csv
-    #with VolumeDatabaseHandler(resdir) as volumes_db:
+    with VolumeDatabaseHandler(resdir) as volumes_db:
         # This is now written in a seperate file in operational.py
         #volumes_db.load_probabilities_from_shakemap(displacement_threshold=5., 
         #                                            table_filename="exceedance_displacement.npz", 
         #                                            column_name = "p_shake")
     
-    #    volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
-    #    volumes_db.write_volumes_to_rasters(**filter_config)
+        volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
+        volumes_db.write_volumes_to_rasters(**filter_config)
         
-        #volumes_db.plot_distribution()
-        #volumes_db.plot_release_density_plots()
+        volumes_db.plot_distribution()
+        volumes_db.plot_release_density_plots()
         
         #volumes_db.plot_distribution(seed_prob="p_shake")
         #volumes_db.plot_release_density_plots(seed_prob="p_shake")
