@@ -14,6 +14,9 @@ from rvsampler.utils import create_dir
 from rvsampler.cumprobs_by_triangle import caclulate_cumulative_probabilities
 from rvsampler.database_handler import VolumeDatabaseHandler, write_raster, Bingclaw_gridsize
 
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm, Normalize
+
 
 
 def main():
@@ -54,16 +57,17 @@ def main():
     
     volumes_file = os.path.join(resdir, 'volumes','Volumes2.csv')
     cluster_file = os.path.join(resdir, 'volumes','Clusters.csv')
+    bath_file = os.path.join(rundir, 'input', 'bathy', 'messina_001', "bathy_truncated.tif")
     
-    cluster_probabilities(probs, volumes_file, cluster_file,resdir)
+    cluster_probabilities(probs, volumes_file, cluster_file, resdir, bath_file)
     
     
      
     # Plot the distribtuions
     # Er nok enklere å gjøre dette samtidig som man laster alt i cluster_probabilities
     # Litt usikker på om det faktisk blir riktig nå også!
-    with VolumeDatabaseHandler(resdir) as volumes_db:
-        volumes_db.load_probabilities_from_shakemap(displacement_threshold=5., 
+    #with VolumeDatabaseHandler(resdir) as volumes_db:
+    #    volumes_db.load_probabilities_from_shakemap(displacement_threshold=5., 
                                                     table_filename="exceedance_displacement.npz", 
                                                     column_name = "p_shake")
    ## Move this to preparational script 
@@ -73,8 +77,8 @@ def main():
     #    volumes_db.plot_distribution()
     #    volumes_db.plot_release_density_plots()
     #    
-        volumes_db.plot_distribution(seed_prob="p_shake")
-        volumes_db.plot_release_density_plots(seed_prob="p_shake")
+    #    volumes_db.plot_distribution(seed_prob="p_shake")
+    #    volumes_db.plot_release_density_plots(seed_prob="p_shake")
         
     # Cluster the volumes into n_clusters, use the csv for now, but might be faster to use the already
     # opened db?
@@ -85,7 +89,7 @@ def main():
 
     #cluster_volumes(volumes_csv, tri_tif, bath_tif, resdir, upstream_dict_path)
 
-def cluster_probabilities(probabilities, volumes_file, cluster_file, resdir):
+def cluster_probabilities(probabilities, volumes_file, cluster_file, resdir, bath_file):
     df_full = pd.read_csv(volumes_file)
     df_cluster = pd.read_csv(cluster_file)
     
@@ -149,8 +153,9 @@ def cluster_probabilities(probabilities, volumes_file, cluster_file, resdir):
     # Egentlig cluster_file, men siden jeg driver å tester trenger jeg ikke skrive over foreløpig
     cluster_file2 = os.path.join(resdir, 'volumes','Clusters2.csv')
     df_cluster.to_csv(cluster_file2, index=False)
+    plot_probabilities(df_full,resdir, probabilities, bath_file)
     
-def plot_probabilities(df_this):
+def plot_probabilities(df_this,resdir, probabilities, bath_file):
     # Flatten and count seeds (excluding -1)
     allseeds_flat = pd.concat([df_this['seed_triangle'], df_this['seed_triangle2']])
     allseeds_flat = allseeds_flat[allseeds_flat != -1]
@@ -190,6 +195,14 @@ def plot_probabilities(df_this):
     lons2 = df_this.loc[valid_mask, 'lon']
     lats2 = df_this.loc[valid_mask, 'lat']
     weights2 = df_this.loc[valid_mask, 'seed_count']
+
+    # Load the batymetri
+    with rasterio.open(bath_file) as src:
+        bathymetri = src.read(1)  # First band
+        bathymetri[bathymetri > 60000] = 0
+        bounds = src.bounds 
+        extent = [bounds.left, bounds.right, bounds.bottom, bounds.top]
+
 
     # Plot
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
@@ -250,7 +263,8 @@ def plot_probabilities(df_this):
     axes[1].grid(True)
 
     plt.tight_layout()
-    plt.savefig("Pres_locations3.png", dpi=300, bbox_inches='tight')
+    filename = os.path.join(resdir,'volumes','Volumes_probs_new.png')
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.show()
     
     
