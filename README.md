@@ -40,6 +40,8 @@ After execution of both submodules, the generated `rundir` has the following fol
 ```
 
 ## Dependencies
+ - Python dependencies are specified in the `pyproject.toml` file.
+
  - [Whitebox tools](https://github.com/jblindsay/whitebox-tools) is applied for the extraction of basic topographic features like slope and aspect. Alternatively, slope and aspect may be given as input.
 
  - [GDAL](https://gdal.org/en/stable/) GDAL is applied for some basic raster operations in the preparational part of the module.
