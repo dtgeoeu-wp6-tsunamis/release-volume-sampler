@@ -1,0 +1,16 @@
+BootStrap: docker
+From: osgeo/grass-gis:releasebranch_8_4-alpine
+
+%files
+    r.slopeunits
+    clean_method_3.sh
+    grassjob.sh
+
+%post
+    export SCRIPTS=/usr/local/grass/scripts
+    mv r.slopeunits $SCRIPTS
+    mv clean_method_3.sh $SCRIPTS
+
+    chmod ugo+rx $SCRIPTS/r.slopeunits
+    chmod ugo+rx $SCRIPTS/clean_method_3.sh 
+    chmod ugo+x grassjob.sh
