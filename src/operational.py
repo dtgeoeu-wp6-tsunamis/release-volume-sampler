@@ -68,8 +68,8 @@ def main():
     # Litt usikker på om det faktisk blir riktig nå også!
     #with VolumeDatabaseHandler(resdir) as volumes_db:
     #    volumes_db.load_probabilities_from_shakemap(displacement_threshold=5., 
-                                                    table_filename="exceedance_displacement.npz", 
-                                                    column_name = "p_shake")
+    #                                                table_filename="exceedance_displacement.npz", 
+    #                                                column_name = "p_shake")
    ## Move this to preparational script 
    #     volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
     #    volumes_db.write_volumes_to_rasters(**filter_config)

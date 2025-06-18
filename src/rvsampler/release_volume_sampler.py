@@ -227,9 +227,9 @@ class RecursiveReleaseAnalysis:
         #p3 = points[self.triangles][:,2,:]
 
         for ist, ss in enumerate(seed_triangles):
-            distances = np.linalg.norm(points[self.triangles[ss]] - points[self.triangles[seed_triangles]], axis=1)
+            distances = np.linalg.norm(points[self.triangles[ss]].mean(axis=0) - points[self.triangles[seed_triangles]].mean(axis=1), axis=1)
             
-            within_1km_indices = np.where(distances <= 500)[0]
+            within_1km_indices = np.where(distances <= 1000)[0]
             
             for i in seed_triangles[within_1km_indices]:
                 other = i
@@ -237,6 +237,7 @@ class RecursiveReleaseAnalysis:
                     pair = tuple(sorted((ss, other)))  # sort to handle (a,b) == (b,a)
                     st_pairs.add(pair)
         
+        #st_pairs = set(list(st_pairs)[:50])
         
        
         with VolumeDatabaseHandler(self.rundir) as volumes_db:
@@ -263,16 +264,16 @@ class RecursiveReleaseAnalysis:
                     volumes_db.insert_volume(volume_data=volume)
                   
             for pair in st_pairs:
-                volumes = []
+                volumes2 = []
                 # Initiate recursion for the given seed.
-                pair2 = [int(x) for x in pair]
+                pair2 = [int(x) for x in pair] # Convert to list
                 release = Release(triangulation=self, released=pair2, released_at_step = [0], probability = 1., step = 1)
                 
                 # traverse the released volumes.
-                release.write_release(volumes)
+                release.write_release(volumes2)
                 
                 # Append features
-                for volume in volumes:
+                for volume in volumes2:
                     volume["area"] = self.areas[volume["released"]].sum()
                     volume["mean_elevation"] = float(self.elevation[self.triangles[volume["released"]].flatten()].mean()) # Elevation is point data.
                     volume["mean_slope"] = self.slopes[volume["released"]].mean()
@@ -281,7 +282,7 @@ class RecursiveReleaseAnalysis:
                     volume["p_fos_seed"] = seed_probability[pair2[0]]*seed_probability[pair2[1]]
                 
                 # Add volumes to database
-                for volume in volumes:
+                for volume in volumes2:
                     volumes_db.insert_volume(volume_data=volume)
 
 

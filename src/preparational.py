@@ -46,8 +46,8 @@ def main():
     
     filter_config = {
         "tsunami_potential_ratio_threshold": 1.,
-        "max_rasters": 1000,
-        "raster_driver": 'AAIGrid', # Gtiff/AAIGrid
+        "max_rasters": 10,
+        "raster_driver": 'GTiff', # GTiff/AAIGrid
     }
     
     paths = initialize(**config)    
@@ -63,8 +63,8 @@ def main():
         #                                            table_filename="exceedance_displacement.npz", 
         #                                            column_name = "p_shake")
     
-        #volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
-        volumes_db.write_volumes_to_rasters(**filter_config)
+        volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
+        #volumes_db.write_volumes_to_rasters(**filter_config)
         
         #volumes_db.plot_distribution()
         #volumes_db.plot_release_density_plots()
@@ -201,6 +201,8 @@ def cluster_volumes(volfile, trifile, bathfile, resdir, upstream_dict_path):
         idx = closest_df.index[i]
         volume = closest_df.loc[idx]
         write_raster(dict(volume), triangles, tri_profile, os.path.join(resdir,'volumes'), raster_driver='AAIGrid', crop=True)
+        write_raster(dict(volume), triangles, tri_profile, os.path.join(resdir,'volumes'), raster_driver='GTiff', crop=True)
+        #write_raster(dict(volume), triangles, tri_profile, os.path.join(resdir,'volumes'), raster_driver='GTiff', crop=False)
         # Calculate the boxes
         LONLO, LONHI, LATLO, LATHI = Bingclaw_gridsize(volume, upstream_dict, lon_tri, lat_tri, triangles)
         closest_df.at[idx, 'LONLO'] = LONLO

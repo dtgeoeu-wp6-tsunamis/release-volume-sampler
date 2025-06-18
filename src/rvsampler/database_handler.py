@@ -78,7 +78,7 @@ def main():
 #SFR 26.05.2025, Moved this function out of write_volumes_to_rasters so it can be used for writing the
 # rasters from the cluster
 def write_raster(volume, tri_mask, tri_profile, resdir, raster_driver="AAIGrid", crop=True):
-    volume_mask = np.isin(tri_mask, json.loads(volume["released"]))
+    volume_mask = np.isin(tri_mask, json.loads(str(volume["released"])))
     volume_raster = convolve2d(volume_mask.astype(float) * volume["thickness"], np.ones((3, 3)) / 9., mode="same")
     #print(i, max_rasters)
     if crop:
@@ -105,14 +105,18 @@ def write_raster(volume, tri_mask, tri_profile, resdir, raster_driver="AAIGrid",
         else:
             cropped_raster = volume_raster
             profile = tri_profile
+        volume_path = os.path.join(
+        resdir,
+        f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}-{volume["seed_triangle2"]}-{"crop"}{SUFFIX_MAP[raster_driver]}'
+    )
     else:
         cropped_raster = volume_raster
         profile = tri_profile
 
-    volume_path = os.path.join(
-        resdir,
-        f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}-{volume["seed_triangle2"]}{SUFFIX_MAP[raster_driver]}'
-    )
+        volume_path = os.path.join(
+            resdir,
+            f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}-{volume["seed_triangle2"]}{SUFFIX_MAP[raster_driver]}'
+        )
     
     # Set nodata value
     profile.update({
@@ -140,6 +144,13 @@ def Bingclaw_gridsize(volume, upstream_dict, lon_tri, lat_tri, tri_mask):
     
     # Find all polygons in the upstream_dict that covers the seed triangle
     matching_keys = [k for k, v in upstream_dict.items() if volume["seed_triangle"] in v]
+
+    if volume["seed_triangle2"] != -1:
+        matching_keys2 = [k for k, v in upstream_dict.items() if volume["seed_triangle2"] in v]
+        matching_keys += matching_keys2  # Extends the list
+    
+    
+    
     # Merge all polygons into one
     merged = np.concatenate([upstream_dict[k] for k in matching_keys])
     # Find all unique triangles from the polygons
@@ -428,6 +439,7 @@ class VolumeDatabaseHandler:
         rasterdir = os.path.join(self.output_dir, "rasters")
         create_dir(rasterdir, logger=self.logger, clear=True)
 
+        print('reading triangles')
         with rasterio.open(self.tri_mask_path) as src:
             tri_mask = src.read(1)
             tri_profile = src.profile
@@ -435,7 +447,10 @@ class VolumeDatabaseHandler:
         tri_profile.update(dtype=rasterio.float32, count=1, driver=raster_driver)
 
         for i, volume in enumerate(self.fetch_volumes_ordered()):
+            print('Writing volume ID'+str(volume['id']))
+            
             write_raster(volume, tri_mask, tri_profile, self.output_dir, raster_driver=raster_driver, crop=True)
+            #write_raster(volume, tri_mask, tri_profile, self.output_dir, raster_driver="GTiff", crop=True)
             #volume_mask = np.isin(tri_mask, volume["released"])
             #volume_raster = convolve2d(volume_mask.astype(float) * volume["thickness"], np.ones((3, 3)) / 9., mode="same")
             #print(i, max_rasters)
