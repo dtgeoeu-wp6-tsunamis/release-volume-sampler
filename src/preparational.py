@@ -80,7 +80,10 @@ def main():
     upstream_dict_path = os.path.join(resdir, 'triangulation',"poly_slopes.npy")
     print('Cluster_volumes')
     cluster_volumes(volumes_csv, tri_tif, bath_tif, resdir, upstream_dict_path)
-    
+   
+#TODO: EBR-2023-10-30: 
+# I think this should be in a separate module cluster.py importimng the VolumeDatabaseHandler
+# - The clustering assigns two more collumns: a cluster label (int) and a is_representative (boolean).
 def cluster_volumes(volfile, trifile, bathfile, resdir, upstream_dict_path):
     print('read volumes')
     df_vol = pd.read_csv(volfile)
@@ -325,7 +328,8 @@ def sample_release_volumes(rundir):
     poly_slopes(rundir, analysis)
     
     analysis.run(**run_config)
-      
+    
+# TDOD: EBR-2023-10-30: These functions should be moved to database_handler.py.
 def poly_slopes(rundir, analysis):
     # list of all triangles
     utriangles = np.arange(analysis.n_triangles)
