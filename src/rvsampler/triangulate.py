@@ -82,7 +82,6 @@ class Triangulate:
         self.true_elevations = tf.cast(self.target_elevation_function(self.eval_points), tf.float32)
         
         self.slopeunitfile = slopeunitfile
-        #self.slopeunits = np.empty(())
         
 
         # Dump parameters to file
@@ -269,8 +268,8 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         mask_interior = mask & ~mask_boundary
 
         # Added by SFR 24.04.25
-        #mask_boundary = mask_boundary.flatten()
-        #mask_interior = mask_interior.flatten()
+        mask_boundary = mask_boundary.flatten()
+        mask_interior = mask_interior.flatten()
 
         interior_points = np.vstack([eastings[mask_interior], northings[mask_interior]]).T
         boundary_points = np.vstack([eastings[mask_boundary], northings[mask_boundary]]).T
@@ -398,7 +397,7 @@ Area loss: {area_weight*area_loss.numpy():.10e}
             
             # Converter til slopeunits grid, kan spare tid ved å sjekke først om disse er det samme!
             transformer2 = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
-            easting2, northing2 = transformer.transform(lons, lats)
+            easting2, northing2 = transformer2.transform(lons, lats)
             points2 = np.vstack([easting2, northing2]).T
             
             # Flatten and stack the xv and yv coordinate grids
@@ -409,9 +408,10 @@ Area loss: {area_weight*area_loss.numpy():.10e}
 
             self.slopeunits = np.empty(len(self.tri.simplices))
             for i in range(len(self.tri.simplices)):
+                #print(i)
                 center = points2[self.tri.simplices][i, :].mean(axis=0)
                 dist, closest_index = tree.query(center)
-                self.slopeunits[i] = data.flatten()[closest_index]
+                self.slopeunits[i] = data.flatten().data[closest_index]
         else:
             self.slopeunits = -1*np.ones((self.tri.simplices))
 
@@ -446,6 +446,7 @@ class Triangulation:
         self.is_interior = self.mesh.cell_data["is_interior"][0] == 1
         self.triangles = self.mesh.cells_dict["triangle"]
         self.n_triangles = self.triangles.shape[0]
+        self.slopeunits = self.mesh.cell_data["slopeunits"][0]
         self.logger.info(f"n_triangles: {self.n_triangles}")
         
         self.logger.info("Calculate vertice locations (easting, northing) using projection EPSG:{self.utm_epsg_code}.")
