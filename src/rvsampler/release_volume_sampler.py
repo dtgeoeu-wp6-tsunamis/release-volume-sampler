@@ -181,13 +181,7 @@ class RecursiveReleaseAnalysis:
                 release.write_release(volumes)
                 
                 # Append features
-                for volume in volumes:
-                    volume["area"] = self.triangulation.areas[volume["released"]].sum()
-                    volume["mean_elevation"] = float(self.triangulation.elevation[self.triangulation.triangles[volume["released"]].flatten()].mean()) # Elevation is point data.
-                    volume["mean_slope"] = self.triangulation.slopes[volume["released"]].mean()
-                    volume["seed_triangle"] = int(seed_triangle)
-                    volume["seed_triangle2"] = -1
-                    volume["p_fos_seed"] = seed_probability[seed_triangle]
+                self.append_features_to_volumes(volumes, [int(seed_triangle)], seed_probability[seed_triangle])
                 
                 # Add volumes to database
                 for volume in volumes:
@@ -221,6 +215,20 @@ class RecursiveReleaseAnalysis:
                     # Add volumes to database
                     for volume in volumes2:
                         volumes_db.insert_volume(volume_data=volume)
+    
+    def append_features_to_volumes(self, volumes, seed_triangles, p_fos_seed):
+        """
+        Append features to the volumes list.
+        """
+        for volume in volumes:
+            volume["seed_triangles"] = seed_triangles
+            volume["p_fos_seed"] = p_fos_seed
+            volume["area"] = self.triangulation.areas[volume["released"]].sum()
+            volume["mean_elevation"] = float(self.triangulation.elevation[self.triangulation.triangles[volume["released"]].flatten()].mean())
+            volume["mean_slope"] = self.triangulation.slopes[volume["released"]].mean()
+            volume["mean_easting"] = self.triangulation.easting[self.triangulation.triangles[volume["released"]].flatten()].mean()
+            volume["mean_northing"] = self.triangulation.northing[self.triangulation.triangles[volume["released"]].flatten()].mean()
+        return volumes
 
 
 class Release():

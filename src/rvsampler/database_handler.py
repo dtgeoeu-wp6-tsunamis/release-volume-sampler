@@ -21,8 +21,8 @@ SUFFIX_MAP = {
 }
 
 COLUMN_NAMES = ['id', 'released', 'condprob',
-           'area', 'mean_elevation', 'mean_slope', 
-           'seed_triangle', 'seed_triangle2', 'p_fos_seed', 'volume', 
+           'area', 'mean_elevation', 'mean_easting', 'mean_northing', 'mean_slope', 
+           'seed_triangles', 'p_fos_seed', 'volume', 
            'thickness', 'tsunami_potential_ratio',
            'no2d']
 
@@ -33,9 +33,10 @@ VOLUMES_SCHEMA = {
     "condprob": "REAL",
     "area": "REAL",
     "mean_elevation": "REAL",
+    "mean_easting": "REAL",
+    "mean_northing": "REAL",
     "mean_slope": "REAL",
-    "seed_triangle": "INTEGER",
-    "seed_triangle2": "INTEGER",
+    "seed_triangles": "JSON",
     "p_fos_seed": "REAL",
     "volume": "REAL",
     "thickness": "REAL",
@@ -279,18 +280,19 @@ class VolumeDatabaseHandler:
                                                                                         volume_data["mean_elevation"])
             self.cursor.execute("""
                 INSERT INTO volumes (
-                    released, condprob, area, mean_elevation, mean_slope,
-                    seed_triangle, seed_triangle2, p_fos_seed, volume, thickness, tsunami_potential_ratio, no2d
+                    released, condprob, area, mean_elevation, mean_easting, mean_northing, mean_slope,
+                    seed_triangles, p_fos_seed, volume, thickness, tsunami_potential_ratio, no2d
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 json.dumps(volume_data["released"]),  # Serialize list to JSON
                 volume_data["condprob"],
                 volume_data["area"],
                 volume_data["mean_elevation"],
+                volume_data["mean_easting"],
+                volume_data["mean_northing"],
                 volume_data["mean_slope"],
-                volume_data["seed_triangle"],
-                volume_data["seed_triangle2"],
+                json.dumps(volume_data["seed_triangles"]),
                 volume_data["p_fos_seed"],
                 volume,
                 thickness,
