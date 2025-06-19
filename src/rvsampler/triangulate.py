@@ -9,10 +9,11 @@ from pyproj import Transformer
 import matplotlib.cm as cm
 import os
 import meshio
+import json
+
 from rvsampler.utils import create_dir
 from rvsampler.set_logg import setup_logger
 from scipy.spatial import cKDTree
-
 
 def main():
     """ To ensure that modules are imports works, run the script as a module.
@@ -33,7 +34,7 @@ def main():
         "elevation_weight": 1e-2
     }
 
-    triang = Triangulation(**config)
+    triang = Triangulate(**config)
     triang.fit(**optimization_params)
     triang.plot_triangulation()
     triang.assign_slopeunits()
@@ -41,22 +42,23 @@ def main():
     
 
 
-class Triangulation:
+class Triangulate:
     
     def __init__(self, rundir, bathyfile, utm_epsg_code, resolution, slopeunitfile):
         """ Class to triangulate topography subject to optimization of triangle shape, 
             approximation of the topography and equally sized triangles.
-            
+     
         Attributes: 
             output_dir (str): Path to output directrory.
             bathyfile (str): Path to bathymetry file in geographic coordinates (longitude-latitude).
             utm_epsg_code (int): EPSG code for the projection applied to compute areas and distances.
             resolution (Tuple[int, int]): Grid dimension for the vertices in the initial triangulation.
         """
+
         # Load real raster data
         self.output_dir = os.path.join(rundir, "triangulation")
         create_dir(self.output_dir)
-        self.logger = setup_logger("triangulation", self.output_dir)
+        self.logger = setup_logger("triangulate", self.output_dir)
         
         self.bathyfile = os.path.join(rundir, bathyfile)
         self.src = rasterio.open(self.bathyfile)
@@ -83,6 +85,14 @@ class Triangulation:
         #self.slopeunits = np.empty(())
         
 
+        # Dump parameters to file
+        with open(os.path.join(self.output_dir, "triangulation_params.json"), 'w') as f:
+            json.dump({
+                "bathyfile": self.bathyfile,
+                "utm_epsg_code": self.UTM_epsg_code,
+                "resolution": self.resolution,
+            }, f, indent=4)
+            
     def triangle_is_interior(self):
         return(np.array([not all(self.triang_point_is_boundary[t]) for t in self.tri.simplices]))
 
@@ -259,8 +269,8 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         mask_interior = mask & ~mask_boundary
 
         # Added by SFR 24.04.25
-        mask_boundary = mask_boundary.flatten()
-        mask_interior = mask_interior.flatten()
+        #mask_boundary = mask_boundary.flatten()
+        #mask_interior = mask_interior.flatten()
 
         interior_points = np.vstack([eastings[mask_interior], northings[mask_interior]]).T
         boundary_points = np.vstack([eastings[mask_boundary], northings[mask_boundary]]).T
@@ -405,6 +415,110 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         else:
             self.slopeunits = -1*np.ones((self.tri.simplices))
 
+
+class Triangulation:
+    
+    """ Class that loads triangulation from directory. Used for cacluating and accessing
+        triangle properties such as normals, areas, slopes and side normals.
+    """
+    
+    def __init__(self, rundir):
+        self.rundir = rundir
+        self.output_dir = os.path.join(rundir, "triangulation")
+        self.logger = setup_logger("triangulation", self.output_dir)
+        
+        # load parameters from file
+        params_file = os.path.join(self.output_dir, "triangulation_params.json")
+        self.logger.info(f"Load parameters from {params_file}")
+        if not os.path.exists(params_file):
+            raise FileNotFoundError(f"Parameters file {params_file} does not exist.")
+        with open(params_file, 'r') as f:
+            params = json.load(f)
+        self.bathyfile = params.get("bathyfile")
+        self.utm_epsg_code = params.get("utm_epsg_code")
+        
+        self.mesh_path = os.path.join(self.output_dir, "triangulation.vtk")
+        self.logger.info(f"Load mesh: {self.mesh_path}")
+        self.mesh = meshio.read(self.mesh_path)
+        
+        self.elevation = self.mesh.point_data["Elevation"]
+        self.neighbours = self.mesh.cell_data["neighbours"][0]
+        self.is_interior = self.mesh.cell_data["is_interior"][0] == 1
+        self.triangles = self.mesh.cells_dict["triangle"]
+        self.n_triangles = self.triangles.shape[0]
+        self.logger.info(f"n_triangles: {self.n_triangles}")
+        
+        self.logger.info("Calculate vertice locations (easting, northing) using projection EPSG:{self.utm_epsg_code}.")
+        self.transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{self.utm_epsg_code}", always_xy=True)
+        self.easting, self.northing = self.transformer.transform(
+            self.mesh.points[:, 0], self.mesh.points[:, 1]
+        )
+        
+        # Calculate triangle properties
+        self.logger.info("Calculate triangle properties: normals, sides, areas, slopes and side normals.")
+        self.normals, self.sides, self.areas, self.slopes =  self.get_normals_sides_areas_slopes()
+        self.side_normals = self.get_side_normals()
+        self.grads = self.get_boundary_gradients()  # Directional gradients across boundary
+        
+    def get_normals_sides_areas_slopes(self):
+        """Compute triangle geometric properties.
+        - Normals scaled so that z-axis has lenght 1.
+        - slopes in degrees.
+        """
+        points = np.vstack([self.easting, self.northing, self.elevation]).T
+        
+        p1 = points[self.triangles][:, 0, :]
+        p2 = points[self.triangles][:, 1, :]
+        p3 = points[self.triangles][:, 2, :]
+        
+        cross_products = np.linalg.cross(p2 - p1, p3 - p1)
+        areas = 0.5 * np.linalg.norm(cross_products, axis=1) 
+        normals = cross_products/cross_products[:, 2].reshape(-1, 1) # scale so that n3 = 1. (Easier to calculate gradient)
+        
+        normal_lenghts = np.sqrt((normals**2).sum(axis=-1))
+        slopes = np.rad2deg(np.arccos(1/normal_lenghts))
+        
+        # Compute side lengths (i-th side is opposite of i-th vertice).
+        sides = np.vstack([np.linalg.norm(s, axis=1) for s in [p3 - p2, p1 - p3, p2 - p1]]).T
+        
+        return normals, sides, areas, slopes
+
+    def get_side_normals(self):
+        """Returns outward pointing side normals (2D) of counterclockwise oriented triangles.
+        """
+        points = np.vstack([self.easting, self.northing]).T
+
+        p1 = points[self.triangles][:,0,:]
+        p2 = points[self.triangles][:,1,:]
+        p3 = points[self.triangles][:,2,:]
+
+        # counterclockwise side vector ri opposite of i'th vertice
+        r3, r1, r2 = p2 - p1, p3 - p2, p1 - p3
+
+        # Normalize
+        r1 = np.divide(r1, np.sqrt(np.sum(r1**2, axis=1)).reshape((-1,1)))
+        r2 = np.divide(r2, np.sqrt(np.sum(r2**2, axis=1)).reshape((-1,1)))
+        r3 = np.divide(r3, np.sqrt(np.sum(r3**2, axis=1)).reshape((-1,1)))
+        
+        R = np.array([[0, -1],[1, 0]])
+
+        # Side normals (si pointing towards i'th neighbour)
+        s1 = np.matmul(R, r1.T).T
+        s2 = np.matmul(R, r2.T).T
+        s3 = np.matmul(R, r3.T).T
+        
+        return np.stack([s1, s2, s3])
+
+    def get_boundary_gradients(self):
+        # Directional gradients across boundary
+        return np.sum(self.normals[:, :-1] * self.side_normals, axis=2).T
+
+    def get_upstream_triangles(self, released_triangle):
+        # Get upstream triangles relative to a given triangle.
+        upstream_triangles = self.neighbours[released_triangle, self.grads[released_triangle, :] > 0]
+        released_is_downstream = self.grads[upstream_triangles][self.neighbours[upstream_triangles] == released_triangle] < 0
+        upstream_is_interior = self.is_interior[upstream_triangles]
+        return upstream_triangles[released_is_downstream & upstream_is_interior].astype(int)
 
 if __name__ == "__main__":
     main()
