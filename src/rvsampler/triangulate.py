@@ -252,9 +252,12 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         )
         # Convert pixel indices to UTM coordinates
         lons, lats = rasterio.transform.xy(self.src.transform, row_indices, col_indices)
+        lons = lons.reshape(row_indices.shape)
+        lats = lats.reshape(row_indices.shape)
+        
         eastings, northings = self.lonlat_to_meters(np.array(lons), np.array(lats))
         mask = self.bathy_msk[row_indices, col_indices]
-
+        
         # Add extra boundry vertices to ensure that the entire region is contained in triangulation.
         mask_buff = convolve2d(mask, np.ones((3, 3)), mode='same')> 0.
 
@@ -268,8 +271,8 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         mask_interior = mask & ~mask_boundary
 
         # Added by SFR 24.04.25
-        mask_boundary = mask_boundary.flatten()
-        mask_interior = mask_interior.flatten()
+        #mask_boundary = mask_boundary.flatten()
+        #mask_interior = mask_interior.flatten()
 
         interior_points = np.vstack([eastings[mask_interior], northings[mask_interior]]).T
         boundary_points = np.vstack([eastings[mask_boundary], northings[mask_boundary]]).T
@@ -414,6 +417,35 @@ Area loss: {area_weight*area_loss.numpy():.10e}
                 self.slopeunits[i] = data.flatten().data[closest_index]
         else:
             self.slopeunits = -1*np.ones((self.tri.simplices))
+            
+
+    def poly_slopes(self, rundir):
+        # list of all triangles
+        utriangles = np.arange(len(self.tri.simplices))
+        
+        upstream_dict = {}
+        while len(utriangles) > 0:
+            tlist = get_all_upstream(utriangles[0],-1)
+            upstream_dict[utriangles[0]] = tlist
+            # remove those found from the list
+            for i in tlist:
+                utriangles = np.delete(utriangles, np.where(utriangles == i))
+        
+        np.save(os.path.join(rundir, "triangulation", "poly_slopes.npy"), upstream_dict)
+      
+    def get_all_upstream(self, start, last, collected=None):
+        # Calculate all upstream triangles for given start triangle
+        
+        if collected is None:
+            collected = []
+        if start is not None and start not in collected and start > -1:  # avoid duplicates or infinite loops
+            collected.append(start)
+            #print('#######' + str(start)+'##########' + str(last))
+            upstream = self.get_upstream_triangles(start)
+            for i in upstream:
+                collected = get_all_upstream(i, start, collected)
+
+        return collected
 
 
 class Triangulation:

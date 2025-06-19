@@ -24,7 +24,7 @@ COLUMN_NAMES = ['id', 'released', 'condprob',
            'area', 'mean_elevation', 'mean_easting', 'mean_northing', 'mean_slope', 
            'seed_triangles', 'p_fos_seed', 'volume', 
            'thickness', 'tsunami_potential_ratio',
-           'no2d']
+           'no2d', 'slopeunit']
 
 # Schema for the "volumes" table
 VOLUMES_SCHEMA = {
@@ -41,7 +41,8 @@ VOLUMES_SCHEMA = {
     "volume": "REAL",
     "thickness": "REAL",
     "tsunami_potential_ratio": "REAL",
-    "no2d": "REAL"
+    "no2d": "REAL",
+    "slopeunit": "INTEGER"
 }
 
 def main():
@@ -298,6 +299,7 @@ class VolumeDatabaseHandler:
                 thickness,
                 tsunami_potential_ratio,
                 no2d
+                
             ))
             self.conn.commit()
         except Exception as e:
