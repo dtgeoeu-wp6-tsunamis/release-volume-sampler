@@ -2,16 +2,16 @@
 
 
 # Variables
-IMAGE_DIR ?= /mnt/c/Users/SFr/Work/VolumeSampler/images
+IMAGE_DIR ?= /home/sfr/release-volume-sampler/images
 IMAGE_NAME = grass.sif
 DEF_FILE = grass.def
 IMAGE_PATH = $(IMAGE_DIR)/$(IMAGE_NAME)
-RUNDIR ?= /mnt/c/Users/SFr/Work/VolumeSampler/generated/messina_001
+RUNDIR ?= /home/sfr/release-volume-sampler/generated/messina_001
 
 # Build the Singularity container
 build:
 	@echo "Building Singularity container..."
-	singularity build $(IMAGE_PATH) $(DEF_FILE)
+	singularity build --fakeroot $(IMAGE_PATH) $(DEF_FILE)
 
 # Run a shell inside the Singularity container
 shell:

@@ -8,11 +8,12 @@ RESDIR ?= $(RUNDIR)/generated/messina_001
 
 # Multistep proceedures - Parameters set in python scripts
 # nohup poetry run python src/preparational.py --rundir $(RUNDIR) --resdir $(RESDIR) > output_vol.log 2>&1 &
+# poetry run python src/preparational.py --rundir $(RUNDIR) --resdir $(RESDIR)
 # nohup poetry run python src/operational.py --rundir $(RUNDIR) --resdir $(RESDIR) > output_prob.log 2>&1 &
 volumes:
 	@echo " Execute slope analysis and sample volumes..."
 	poetry run python src/preparational.py --rundir $(RUNDIR) --resdir $(RESDIR)
-
+	
 probabilities:
 	@echo " Assign probabilities to volumes..."
 	poetry run python src/operational.py --rundir $(RUNDIR) --resdir $(RESDIR)

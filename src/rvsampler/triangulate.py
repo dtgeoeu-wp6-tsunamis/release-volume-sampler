@@ -11,6 +11,7 @@ import os
 import meshio
 from rvsampler.utils import create_dir
 from rvsampler.set_logg import setup_logger
+from scipy.spatial import cKDTree
 
 
 def main():
@@ -35,12 +36,14 @@ def main():
     triang = Triangulation(**config)
     triang.fit(**optimization_params)
     triang.plot_triangulation()
+    triang.assign_slopeunits()
     triang.write_to_file()
+    
 
 
 class Triangulation:
     
-    def __init__(self, rundir, bathyfile, utm_epsg_code, resolution):
+    def __init__(self, rundir, bathyfile, utm_epsg_code, resolution, slopeunitfile):
         """ Class to triangulate topography subject to optimization of triangle shape, 
             approximation of the topography and equally sized triangles.
             
@@ -75,6 +78,10 @@ class Triangulation:
         all_eval_points, eval_point_is_boundary = self.create_points()
         self.eval_points  = tf.cast(all_eval_points[eval_point_is_boundary == 0], tf.float32) # remove boundary points
         self.true_elevations = tf.cast(self.target_elevation_function(self.eval_points), tf.float32)
+        
+        self.slopeunitfile = slopeunitfile
+        #self.slopeunits = np.empty(())
+        
 
     def triangle_is_interior(self):
         return(np.array([not all(self.triang_point_is_boundary[t]) for t in self.tri.simplices]))
@@ -331,7 +338,8 @@ Area loss: {area_weight*area_loss.numpy():.10e}
             point_data={"Elevation": elevations,
                         "is_boundary": self.triang_point_is_boundary},
             cell_data={"is_interior": [self.triangle_is_interior().astype(int)],
-                       "neighbours": [self.tri.neighbors]}
+                       "neighbours": [self.tri.neighbors],
+                       "slopeunits": [self.slopeunits],}
         )
         vtkfile_out = os.path.join(self.output_dir, vtkfile)
         self.logger.info(f"Writes triangulation to: {vtkfile_out}")
@@ -352,6 +360,50 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         self.logger.info(f"Writes triangulation to: {rasterfile_out}")
         with rasterio.open(rasterfile_out,'w', **self.src.profile) as dst:
             dst.write(simplexes.reshape((self.src.height, self.src.width)), 1)
+        
+    def assign_slopeunits(self, use_slopeunits=True):
+        if use_slopeunits:
+            # Open and read the file
+            with rasterio.open(self.slopeunitfile) as src:
+                data = src.read(1)  # Read the first band
+                #profile = src.profile  # Metadata
+                #bounds = src.bounds    # Spatial extent
+                crs = src.crs          # Coordinate reference system
+                #nodata = src.nodata
+                transform = src.transform
+            
+            # Calculate slopeunits grid# Create coordinate arrays using the transform
+            height, width = data.shape
+            x = np.arange(0, width) * transform.a + transform.c
+            y = np.arange(0, height) * transform.e + transform.f
+
+            # Convert y to match array orientation
+            xv, yv = np.meshgrid(x, y)
+            
+            
+            # Converter til lat/lon
+            transformer = Transformer.from_crs(f"EPSG:{self.UTM_epsg_code}" ,"EPSG:4326" , always_xy=True)
+            eastings, northings = self.vertices[:,0].numpy(), self.vertices[:,1].numpy()
+            lons, lats = transformer.transform(eastings, northings)
+            
+            # Converter til slopeunits grid, kan spare tid ved å sjekke først om disse er det samme!
+            transformer2 = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+            easting2, northing2 = transformer.transform(lons, lats)
+            points2 = np.vstack([easting2, northing2]).T
+            
+            # Flatten and stack the xv and yv coordinate grids
+            grid_points = np.vstack([xv.flatten(), yv.flatten()]).T
+                
+            # Build the KD-tree once
+            tree = cKDTree(grid_points)
+
+            self.slopeunits = np.empty(len(self.tri.simplices))
+            for i in range(len(self.tri.simplices)):
+                center = points2[self.tri.simplices][i, :].mean(axis=0)
+                dist, closest_index = tree.query(center)
+                self.slopeunits[i] = data.flatten()[closest_index]
+        else:
+            self.slopeunits = -1*np.ones((self.tri.simplices))
 
 
 if __name__ == "__main__":

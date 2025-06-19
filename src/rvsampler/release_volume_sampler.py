@@ -70,7 +70,7 @@ class RecursiveReleaseAnalysis:
         
         self.utm_epsg_code = utm_epsg_code             # Projection used for calculation of areas and sides of triangles.
         self.cumprob_logfos_path = cumprob_logfos_path # Path to lookuptable for cumprob of logfos.
-        
+       
         
         self.logger.info(f"Load mesh: {mesh_path}")
         self.mesh = meshio.read(mesh_path)

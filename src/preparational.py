@@ -50,10 +50,13 @@ def main():
         "raster_driver": 'GTiff', # GTiff/AAIGrid
     }
     
-    paths = initialize(**config)    
+    
+    paths = initialize(**config)
         
-    execute_slope_analysis(paths)
+    #execute_slope_analysis(paths)
     triangulate_domain(paths)
+    
+    """
     sample_release_volumes(paths) 
     
     # Write the volumes to csv
@@ -80,6 +83,8 @@ def main():
     upstream_dict_path = os.path.join(resdir, 'triangulation',"poly_slopes.npy")
     print('Cluster_volumes')
     cluster_volumes(volumes_csv, tri_tif, bath_tif, resdir, upstream_dict_path)
+    
+    """
    
 #TODO: EBR-2023-10-30: 
 # I think this should be in a separate module cluster.py importimng the VolumeDatabaseHandler
@@ -283,7 +288,8 @@ def triangulate_domain(rundir):
         "rundir": rundir,
         "bathyfile": "bathy_truncated.tif",
         "utm_epsg_code": 32633, #Messina strait
-        "resolution": (110, 110)
+        "resolution": (110, 110),
+        "slopeunitfile": os.path.join(rundir,'..','slopeunits',"slumap_clean_utm.tif"),
     }
     optimization_params = {
         "num_iterations": 2000,
@@ -295,6 +301,7 @@ def triangulate_domain(rundir):
     triang = Triangulation(**config)
     triang.fit(**optimization_params)
     triang.plot_triangulation()
+    triang.assign_slopeunits()
     triang.write_to_file()
     
     # Calculate cumulative probabilities lookup table by triangle
