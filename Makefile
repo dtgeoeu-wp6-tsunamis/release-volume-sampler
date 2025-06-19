@@ -2,51 +2,52 @@
 # Makefile with some basic execution commands.
 
 # Default input, for other paths provide input when running the commands:
-# make volumes RUNDIR=c:/rundir
-RUNDIR ?= /home/sfr/release-volume-sampler
-RESDIR ?= $(RUNDIR)/generated/messina_001
+# make volumes rootdir=c:/ROOTDIR
+ROOTDIR ?= /home/ebr/projects/release-volume-sampler
+REGION ?= messina_003
+RUNDIR ?= $(ROOTDIR)/generated/$(REGION) # Defined path in preparational.py
 
 # Multistep proceedures - Parameters set in python scripts
-# nohup poetry run python src/preparational.py --rundir $(RUNDIR) --resdir $(RESDIR) > output_vol.log 2>&1 &
-# nohup poetry run python src/operational.py --rundir $(RUNDIR) --resdir $(RESDIR) > output_prob.log 2>&1 &
+# nohup poetry run python src/preparational.py --ROOTDIR $(ROOTDIR) --RUNDIR $(RUNDIR) > output_vol.log 2>&1 &
+# nohup poetry run python src/operational.py --ROOTDIR $(ROOTDIR) --RUNDIR $(RUNDIR) > output_prob.log 2>&1 &
 volumes:
 	@echo " Execute slope analysis and sample volumes..."
-	poetry run python src/preparational.py --rundir $(RUNDIR) --resdir $(RESDIR)
+	poetry run python src/preparational.py --rootdir $(ROOTDIR) --region $(REGION)
 
 probabilities:
 	@echo " Assign probabilities to volumes..."
-	poetry run python src/operational.py --rundir $(RUNDIR) --resdir $(RESDIR)
+	poetry run python src/operational.py --rootdir $(ROOTDIR) --rundir $(RUNDIR)
 
-# Plot output make plots RUNDIR=...
+# Plot output make plots ROOTDIR=...
 plots:
 	@echo " Plot cumulatives.."
-	@for folder in $(shell find $(RESDIR) -type d -name "cumulative"); do \
+	@for folder in $(shell find $(RUNDIR) -type d -name "cumulative"); do \
 		echo "Plot content $$folder"; \
 		poetry run python -m src.plot "$$folder"; \
 	done
 	
 	@echo " Plot quantiles.."
-	@for folder in $(shell find $(RESDIR) -type d -name "quantiles"); do \
+	@for folder in $(shell find $(RUNDIR) -type d -name "quantiles"); do \
 		echo "Plot content $$folder"; \
 		poetry run python -m src.plot "$$folder"; \
 	done
 	
 	@echo " Plot displacements.."
-	@for folder in $(shell find $(RESDIR) -type d -name "displacements"); do \
+	@for folder in $(shell find $(RUNDIR) -type d -name "displacements"); do \
 		echo "Plot content $$folder"; \
 		poetry run python -m src.plot "$$folder"; \
 	done
 
 	@echo " Plot shakemap.."
-	@for folder in $(shell find $(RESDIR) -type d -name "shakemaps"); do \
+	@for folder in $(shell find $(RUNDIR) -type d -name "shakemaps"); do \
 		echo "Plot content $$folder"; \
 		poetry run python -m src.plot "$$folder"; \
 	done
 
 
 clean:
-	@echo " Delete all output in $(RESDIR)..."
-	rm -rf $(RESDIR)
+	@echo " Delete all output in $(RUNDIR)..."
+	rm -rf $(RUNDIR)
 
 # Help target
 help:

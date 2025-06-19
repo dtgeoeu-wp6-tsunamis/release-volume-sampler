@@ -7,6 +7,7 @@ from itertools import product
 from rvsampler.utils import create_dir
 from rvsampler.set_logg import setup_logger
 from rvsampler.database_handler import VolumeDatabaseHandler
+from rvsampler.triangulate import Triangulation
 
 
 def main():
@@ -25,6 +26,7 @@ def main():
         "fos_threshold": 1.5,
         "recursive_probability_threshold": 0.01,
         "seed_triangle_probability_threshold": 1e-3,
+        "max_n_seed_triangles": 100,
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)
@@ -55,6 +57,8 @@ class RecursiveReleaseAnalysis:
         
         output_dir (str): The directory where output results will be stored.
         
+        mesh_path (str): The file path to the mesh (triangulation.vtk) used for the analysis.
+        
         recursive_probability_threshold (float): The probability threshold below which recursive propagation is truncated.
         
         seed_triangle_probability_threshold (float): The threshold probability used to filter seed triangles. 
@@ -70,25 +74,11 @@ class RecursiveReleaseAnalysis:
         
         self.utm_epsg_code = utm_epsg_code             # Projection used for calculation of areas and sides of triangles.
         self.cumprob_logfos_path = cumprob_logfos_path # Path to lookuptable for cumprob of logfos.
-        
-        
-        self.logger.info(f"Load mesh: {mesh_path}")
-        self.mesh = meshio.read(mesh_path)
-        self.elevation = self.mesh.point_data["Elevation"]
-        self.neighbours = self.mesh.cell_data["neighbours"][0]
-        self.is_interior = self.mesh.cell_data["is_interior"][0] == 1
-        self.triangles = self.mesh.cells_dict["triangle"]
-        self.n_triangles = self.triangles.shape[0]
-        self.logger.info(f"n_triangles: {self.n_triangles}")
-        
-        self.logger.info("Calculate vertice locations (easting, northing) using projection EPSG:{self.utm_epsg_code}.")
-        self.transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{self.utm_epsg_code}", always_xy=True)
-        self.easting, self.northing = self.transformer.transform(
-            self.mesh.points[:, 0], self.mesh.points[:, 1]
-        )
+        self.triangulation = Triangulation(self.rundir)
         
         self.logger.info(" Calculating triangle normals, sides and areas.") # Has to be executed in correct order.
-        self.normals, self.sides, self.areas, self.slopes = self._compute_triangle_properties()
+        self.normals, self.sides, self.areas, self.slopes = self.triangulation.get_normals_sides_areas_slopes()
+       
         # A0 definert som middel trekant størrelse
         # Litt usikker på om det er en god definisjon at denne endrer seg med n_triangles. Det vil si at hvis man har mange flere 
         # å mindre trinagler så endres ikke sannsyneligheten.
@@ -96,62 +86,13 @@ class RecursiveReleaseAnalysis:
         # Use 200000 as this is approximately the result of the above calculation for the default run of the script.
         self.A0 = 200000
         self.logger.info(" Compute boundary normals and gradients.") 
-        self.side_normals = self._compute_side_normals()
+        self.side_normals = self.triangulation.get_side_normals()
         self.grads = self.calculate_boundary_gradients()
         
         # Load lookuptable
         self.logger.info(f"Load cumulative probabilities: {self.cumprob_logfos_path}.")
         cumprob_logfos_npz = np.load(self.cumprob_logfos_path)
         self.cumprob_thresholds, self.cumprob_logfos = cumprob_logfos_npz["thresholds"], cumprob_logfos_npz["probs"]
-
-    def _compute_triangle_properties(self):
-        """Compute triangle geometric properties.
-        - Normals scaled so that z-axis has lenght 1.
-        - slopes in degrees.
-        """
-        points = np.vstack([self.easting, self.northing, self.elevation]).T
-        
-        p1 = points[self.triangles][:, 0, :]
-        p2 = points[self.triangles][:, 1, :]
-        p3 = points[self.triangles][:, 2, :]
-        
-        cross_products = np.linalg.cross(p2 - p1, p3 - p1)
-        areas = 0.5 * np.linalg.norm(cross_products, axis=1) 
-        normals = cross_products/cross_products[:, 2].reshape(-1, 1) # scale so that n3 = 1. (Easier to calculate gradient)
-        
-        normal_lenghts = np.sqrt((normals**2).sum(axis=-1))
-        slopes = np.rad2deg(np.arccos(1/normal_lenghts))
-        
-        # Compute side lengths (i-th side is opposite of i-th vertice).
-        sides = np.vstack([np.linalg.norm(s, axis=1) for s in [p3 - p2, p1 - p3, p2 - p1]]).T
-        
-        return normals, sides, areas, slopes
-
-    def _compute_side_normals(self):
-        """Returns outward pointing side normals (2D) of counterclockwise oriented triangles.
-        """
-        points = np.vstack([self.easting, self.northing]).T
-
-        p1 = points[self.triangles][:,0,:]
-        p2 = points[self.triangles][:,1,:]
-        p3 = points[self.triangles][:,2,:]
-
-        # counterclockwise side vector ri opposite of i'th vertice
-        r3, r1, r2 = p2 - p1, p3 - p2, p1 - p3
-
-        # Normalize
-        r1 = np.divide(r1, np.sqrt(np.sum(r1**2, axis=1)).reshape((-1,1)))
-        r2 = np.divide(r2, np.sqrt(np.sum(r2**2, axis=1)).reshape((-1,1)))
-        r3 = np.divide(r3, np.sqrt(np.sum(r3**2, axis=1)).reshape((-1,1)))
-        
-        R = np.array([[0, -1],[1, 0]])
-
-        # Side normals (si pointing towards i'th neighbour)
-        s1 = np.matmul(R, r1.T).T
-        s2 = np.matmul(R, r2.T).T
-        s3 = np.matmul(R, r3.T).T
-        
-        return np.stack([s1, s2, s3])
 
     def calculate_boundary_gradients(self):
         # Directional gradients across boundary
@@ -161,38 +102,17 @@ class RecursiveReleaseAnalysis:
         # Determine if a triangle will be released based on its FOS and its neighbors
         probs = []
         for triangle in triangles:
-            neighbors_in_release = [t in released_volume for t in self.neighbours[triangle]]
-            delta = self.sides[triangle][neighbors_in_release].sum() / self.sides[triangle].sum()
+            neighbors_in_release = [t in released_volume for t in self.triangulation.neighbours[triangle]]
+            delta = self.triangulation.sides[triangle][neighbors_in_release].sum() / self.triangulation.sides[triangle].sum()
             probability_of_release = np.exp(np.log(self.get_cumulative_logfos(triangle, np.log10(fos_threshold) 
-                                        - np.log10(1-delta)))*(self.areas[triangle]/self.A0))
+                                        - np.log10(1-delta)))*(self.triangulation.areas[triangle]/self.A0))
             probs.append(probability_of_release)
         return np.array(probs)
 
     def get_cumulative_logfos(self, triangle, threshold):
         return np.interp(threshold, xp = self.cumprob_thresholds, fp = self.cumprob_logfos[triangle,:], left=0., right=1.)
-
-    def get_upstream_triangles(self, released_triangle):
-        # Get upstream triangles relative to a released triangle
-        upstream_triangles = self.neighbours[released_triangle, self.grads[released_triangle, :] > 0]
-        released_is_downstream = self.grads[upstream_triangles][self.neighbours[upstream_triangles] == released_triangle] < 0
-        upstream_is_interior = self.is_interior[upstream_triangles]
-        return upstream_triangles[released_is_downstream & upstream_is_interior].astype(int)
     
-    def haversine(lat1, lon1, lat2, lon2):
-        R = 6371.0  # Earth radius in kilometers
-
-        # Convert degrees to radians
-        lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
-
-        dlat = lat2 - lat1
-        dlon = lon2 - lon1
-
-        a = np.sin(dlat / 2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0)**2
-        c = 2 * np.arcsin(np.sqrt(a))
-
-        return R * c  # Distance in km
-   
-    def run(self, seed_triangle_probability_threshold, fos_threshold, recursive_probability_threshold):
+    def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles, recursive_probability_threshold):
         
         # Asssign class variables to Release. 
         Release.fos_threshold = fos_threshold             # To assign probability of released upstream triangles.
@@ -205,10 +125,14 @@ class RecursiveReleaseAnalysis:
             recursive_probability_threshold: {recursive_probability_threshold}")
         
         # Filtration of seed triangles: P(fos < fos_threshold) > threshold
-        all_triangles = np.arange(self.n_triangles)
+        all_triangles = np.arange(self.triangulation.n_triangles)
         seed_probability = np.array([self.get_cumulative_logfos(triangle, np.log10(Release.fos_threshold)) for triangle in all_triangles])
         seed_triangles = all_triangles[np.logical_and(seed_probability > seed_triangle_probability_threshold, seed_probability != 9999.0)]
-        #seed_triangles = all_triangles[np.logical_and(seed_probability > 3e-1, seed_probability != 9999.0)]
+        # Limit number of seed triangles
+        if len(seed_triangles) > max_n_seed_triangles:
+            self.logger.warning(f"Number of seed triangles ({len(seed_triangles)}) exceeds max_n_seed_triangles ({max_n_seed_triangles}). Limiting to max_n_seed_triangles.")
+            seed_triangles = np.random.choice(seed_triangles, size=max_n_seed_triangles, replace=False)
+        
         #print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
         #print(len(seed_triangles))
         #print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
@@ -220,14 +144,14 @@ class RecursiveReleaseAnalysis:
         st_pairs = set()
         
         # Coordinates
-        points = np.vstack([self.easting, self.northing]).T
+        points = np.vstack([self.triangulation.easting, self.triangulation.northing]).T
 
         #p1 = points[self.triangles][:,0,:]
         #p2 = points[self.triangles][:,1,:]
         #p3 = points[self.triangles][:,2,:]
 
         for ist, ss in enumerate(seed_triangles):
-            distances = np.linalg.norm(points[self.triangles[ss]].mean(axis=0) - points[self.triangles[seed_triangles]].mean(axis=1), axis=1)
+            distances = np.linalg.norm(points[self.triangulation.triangles[ss]].mean(axis=0) - points[self.triangulation.triangles[seed_triangles]].mean(axis=1), axis=1)
             
             within_1km_indices = np.where(distances <= 1000)[0]
             
@@ -241,20 +165,26 @@ class RecursiveReleaseAnalysis:
         
        
         with VolumeDatabaseHandler(self.rundir) as volumes_db:
+            sample_pairs = False
             for seed_triangle in seed_triangles:
                 
                 volumes = []
                 # Initiate recursion for the given seed.
-                release = Release(triangulation=self, released=[int(seed_triangle)], released_at_step = [0], probability = 1., step = 1)
+                release = Release(triangulation=self.triangulation, 
+                                  sampler=self, 
+                                  released=[int(seed_triangle)], 
+                                  released_at_step = [0], 
+                                  probability = 1., 
+                                  step = 1)
                 
                 # traverse the released volumes.
                 release.write_release(volumes)
                 
                 # Append features
                 for volume in volumes:
-                    volume["area"] = self.areas[volume["released"]].sum()
-                    volume["mean_elevation"] = float(self.elevation[self.triangles[volume["released"]].flatten()].mean()) # Elevation is point data.
-                    volume["mean_slope"] = self.slopes[volume["released"]].mean()
+                    volume["area"] = self.triangulation.areas[volume["released"]].sum()
+                    volume["mean_elevation"] = float(self.triangulation.elevation[self.triangulation.triangles[volume["released"]].flatten()].mean()) # Elevation is point data.
+                    volume["mean_slope"] = self.triangulation.slopes[volume["released"]].mean()
                     volume["seed_triangle"] = int(seed_triangle)
                     volume["seed_triangle2"] = -1
                     volume["p_fos_seed"] = seed_probability[seed_triangle]
@@ -262,28 +192,35 @@ class RecursiveReleaseAnalysis:
                 # Add volumes to database
                 for volume in volumes:
                     volumes_db.insert_volume(volume_data=volume)
-                  
-            for pair in st_pairs:
-                volumes2 = []
-                # Initiate recursion for the given seed.
-                pair2 = [int(x) for x in pair] # Convert to list
-                release = Release(triangulation=self, released=pair2, released_at_step = [0], probability = 1., step = 1)
-                
-                # traverse the released volumes.
-                release.write_release(volumes2)
-                
-                # Append features
-                for volume in volumes2:
-                    volume["area"] = self.areas[volume["released"]].sum()
-                    volume["mean_elevation"] = float(self.elevation[self.triangles[volume["released"]].flatten()].mean()) # Elevation is point data.
-                    volume["mean_slope"] = self.slopes[volume["released"]].mean()
-                    volume["seed_triangle"] = int(pair2[0])#", ".join(str(x) for x in pair2)
-                    volume["seed_triangle2"] = int(pair2[1])#", ".join(str(x) for x in pair2)
-                    volume["p_fos_seed"] = seed_probability[pair2[0]]*seed_probability[pair2[1]]
-                
-                # Add volumes to database
-                for volume in volumes2:
-                    volumes_db.insert_volume(volume_data=volume)
+                    
+            self.logger.info(f"Finished single triangle initiation. Total: {len(seed_triangles)} seed triangles.")
+            if sample_pairs:
+                for pair in st_pairs:
+                    volumes2 = []
+                    # Initiate recursion for the given seed.
+                    pair2 = [int(x) for x in pair] # Convert to list
+                    release = Release(triangulation=self.triangulation,
+                                      sampler=self,
+                                      released=pair2, 
+                                      released_at_step = [0], 
+                                      probability = 1., 
+                                      step = 1)
+                    
+                    # traverse the released volumes.
+                    release.write_release(volumes2)
+                    
+                    # Append features
+                    for volume in volumes2:
+                        volume["area"] = self.triangulation.areas[volume["released"]].sum()
+                        volume["mean_elevation"] = float(self.triangulation.elevation[self.triangulation.triangles[volume["released"]].flatten()].mean()) # Elevation is point data.
+                        volume["mean_slope"] = self.triangulation.slopes[volume["released"]].mean()
+                        volume["seed_triangle"] = int(pair2[0])#", ".join(str(x) for x in pair2)
+                        volume["seed_triangle2"] = int(pair2[1])#", ".join(str(x) for x in pair2)
+                        volume["p_fos_seed"] = seed_probability[pair2[0]]*seed_probability[pair2[1]]
+                    
+                    # Add volumes to database
+                    for volume in volumes2:
+                        volumes_db.insert_volume(volume_data=volume)
 
 
 class Release():
@@ -295,7 +232,8 @@ class Release():
     
     Instance Attributes:
 
-        triangulation (RecursiveReleaseAnalysis): The current Recursive analysis.
+        triangulation (Triangulation): The current triangulation.
+        sampler (RecursiveReleaseAnalysis): The current Recursive analysis.
         released (list[int]): Previously released triangles.
         released_at_step (list[int]) Step in the recursion at which the coresponding triangle was released.
         probability (float): Probability of the current state.
@@ -307,8 +245,9 @@ class Release():
     fos_threshold = None
     logger = None
     
-    def __init__(self, triangulation, released, released_at_step, probability, step):
+    def __init__(self, triangulation, sampler, released, released_at_step, probability, step):
         self.triangulation = triangulation
+        self.sampler = sampler
         self.released = released                           # List of previously released triangles
         self.released_at_step = released_at_step           # List containing the step at which each triangle was released.
         self.probability = probability                            # Probability of released volume.
@@ -325,7 +264,7 @@ class Release():
             
             if len(upstream_triangles) > 0:
                 upstream_triangles = np.array(list(upstream_triangles))
-                indep_prob = self.triangulation.probability_of_release(upstream_triangles, self.released, self.fos_threshold) # Independent release probabilities
+                indep_prob = self.sampler.probability_of_release(upstream_triangles, self.released, self.fos_threshold) # Independent release probabilities
                 for sub in self._subsets(upstream_triangles): 
                     new_release = upstream_triangles[sub]
                     probability_of_new_release = np.concat([(1-indep_prob)[~sub], indep_prob[sub]]).prod()
@@ -337,7 +276,8 @@ class Release():
                     released_at_step.extend([self.step for i in new_release])
                     self.children.append(
                         Release(
-                            triangulation = self.triangulation, 
+                            triangulation = self.triangulation,
+                            sampler= self.sampler, 
                             released = released,
                             released_at_step = released_at_step,
                             probability = self.probability*probability_of_new_release,
