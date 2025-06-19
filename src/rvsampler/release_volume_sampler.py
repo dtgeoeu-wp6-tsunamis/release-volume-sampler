@@ -224,10 +224,10 @@ class RecursiveReleaseAnalysis:
             volume["seed_triangles"] = seed_triangles
             volume["p_fos_seed"] = p_fos_seed
             volume["area"] = self.triangulation.areas[volume["released"]].sum()
-            volume["mean_elevation"] = float(self.triangulation.elevation[self.triangulation.triangles[volume["released"]].flatten()].mean())
+            volume["mean_elevation"] = float(self.triangulation.elevation[np.unique(self.triangulation.triangles[volume["released"]]).flatten()].mean())
             volume["mean_slope"] = self.triangulation.slopes[volume["released"]].mean()
-            volume["mean_easting"] = self.triangulation.easting[self.triangulation.triangles[volume["released"]].flatten()].mean()
-            volume["mean_northing"] = self.triangulation.northing[self.triangulation.triangles[volume["released"]].flatten()].mean()
+            volume["mean_easting"] = self.triangulation.easting[np.unique(self.triangulation.triangles[volume["released"]]).flatten()].mean()
+            volume["mean_northing"] = self.triangulation.northing[np.unique(self.triangulation.triangles[volume["released"]]).flatten()].mean()
         return volumes
 
 
