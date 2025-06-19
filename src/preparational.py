@@ -51,12 +51,14 @@ def main():
         "raster_driver": 'GTiff', # GTiff/AAIGrid
     }
     
+
     rundir = initialize(**config)    
         
     #execute_slope_analysis(rundir)
     #triangulate_domain(rundir)
     sample_release_volumes(rundir) 
     sys.exit(0)
+
     # Write the volumes to csv
     with VolumeDatabaseHandler(rundir) as volumes_db:
         # This is now written in a seperate file in operational.py
@@ -73,6 +75,19 @@ def main():
         #volumes_db.plot_distribution(seed_prob="p_shake")
         #volumes_db.plot_release_density_plots(seed_prob="p_shake")
         
+
+    # Cluster the volumes into n_clusters, use the csv for now, but might be faster to use the already
+    # opened db?
+    volumes_csv = os.path.join(resdir, 'volumes', "volumes.csv")
+    tri_tif = os.path.join(resdir, 'triangulation', "triangulation.tif")
+    bath_tif = os.path.join(rundir, 'input', 'bathy', 'messina_001', "bathy_truncated.tif")
+    upstream_dict_path = os.path.join(resdir, 'triangulation',"poly_slopes.npy")
+    print('Cluster_volumes')
+    cluster_volumes(volumes_csv, tri_tif, bath_tif, resdir, upstream_dict_path)
+    
+    """
+=======
+>>>>>>> a64cbd6d4a7e0c52715b67299587f331f1f6e7fa
    
     
 def initialize(generated, region, bathyfile, soilregions_filename, soil_parameters_filename, singularity_image):
@@ -138,7 +153,8 @@ def triangulate_domain(rundir):
         "rundir": rundir,
         "bathyfile": "bathy_truncated.tif",
         "utm_epsg_code": 32633, #Messina strait
-        "resolution": (110, 110)
+        "resolution": (110, 110),
+        "slopeunitfile": os.path.join(rundir,'..','slopeunits',"slumap_clean_utm.tif"),
     }
     optimization_params = {
         "num_iterations": 2000,
@@ -150,6 +166,7 @@ def triangulate_domain(rundir):
     triang = Triangulate(**config)
     triang.fit(**optimization_params)
     triang.plot_triangulation()
+    triang.assign_slopeunits()
     triang.write_to_file()
     
     # Calculate cumulative probabilities lookup table by triangle

@@ -149,6 +149,8 @@ class RecursiveReleaseAnalysis:
         #p1 = points[self.triangles][:,0,:]
         #p2 = points[self.triangles][:,1,:]
         #p3 = points[self.triangles][:,2,:]
+        
+        seed_triangles = seed_triangles[:10]
 
         for ist, ss in enumerate(seed_triangles):
             distances = np.linalg.norm(points[self.triangulation.triangles[ss]].mean(axis=0) - points[self.triangulation.triangles[seed_triangles]].mean(axis=1), axis=1)
@@ -228,6 +230,7 @@ class RecursiveReleaseAnalysis:
             volume["mean_slope"] = self.triangulation.slopes[volume["released"]].mean()
             volume["mean_easting"] = self.triangulation.easting[np.unique(self.triangulation.triangles[volume["released"]]).flatten()].mean()
             volume["mean_northing"] = self.triangulation.northing[np.unique(self.triangulation.triangles[volume["released"]]).flatten()].mean()
+            volume["slopeunit"] = self.triangulation.slopeunits[seed_triangles[0]]
         return volumes
 
 

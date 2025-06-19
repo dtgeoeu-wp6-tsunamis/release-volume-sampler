@@ -13,6 +13,7 @@ import json
 
 from rvsampler.utils import create_dir
 from rvsampler.set_logg import setup_logger
+from scipy.spatial import cKDTree
 
 def main():
     """ To ensure that modules are imports works, run the script as a module.
@@ -36,12 +37,14 @@ def main():
     triang = Triangulate(**config)
     triang.fit(**optimization_params)
     triang.plot_triangulation()
+    triang.assign_slopeunits()
     triang.write_to_file()
+    
 
 
 class Triangulate:
     
-    def __init__(self, rundir, bathyfile, utm_epsg_code, resolution):
+    def __init__(self, rundir, bathyfile, utm_epsg_code, resolution, slopeunitfile):
         """ Class to triangulate topography subject to optimization of triangle shape, 
             approximation of the topography and equally sized triangles.
      
@@ -77,6 +80,9 @@ class Triangulate:
         all_eval_points, eval_point_is_boundary = self.create_points()
         self.eval_points  = tf.cast(all_eval_points[eval_point_is_boundary == 0], tf.float32) # remove boundary points
         self.true_elevations = tf.cast(self.target_elevation_function(self.eval_points), tf.float32)
+        
+        self.slopeunitfile = slopeunitfile
+        
 
         # Dump parameters to file
         with open(os.path.join(self.output_dir, "triangulation_params.json"), 'w') as f:
@@ -246,9 +252,12 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         )
         # Convert pixel indices to UTM coordinates
         lons, lats = rasterio.transform.xy(self.src.transform, row_indices, col_indices)
+        lons = lons.reshape(row_indices.shape)
+        lats = lats.reshape(row_indices.shape)
+        
         eastings, northings = self.lonlat_to_meters(np.array(lons), np.array(lats))
         mask = self.bathy_msk[row_indices, col_indices]
-
+        
         # Add extra boundry vertices to ensure that the entire region is contained in triangulation.
         mask_buff = convolve2d(mask, np.ones((3, 3)), mode='same')> 0.
 
@@ -341,7 +350,8 @@ Area loss: {area_weight*area_loss.numpy():.10e}
             point_data={"Elevation": elevations,
                         "is_boundary": self.triang_point_is_boundary},
             cell_data={"is_interior": [self.triangle_is_interior().astype(int)],
-                       "neighbours": [self.tri.neighbors]}
+                       "neighbours": [self.tri.neighbors],
+                       "slopeunits": [self.slopeunits],}
         )
         vtkfile_out = os.path.join(self.output_dir, vtkfile)
         self.logger.info(f"Writes triangulation to: {vtkfile_out}")
@@ -362,6 +372,80 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         self.logger.info(f"Writes triangulation to: {rasterfile_out}")
         with rasterio.open(rasterfile_out,'w', **self.src.profile) as dst:
             dst.write(simplexes.reshape((self.src.height, self.src.width)), 1)
+        
+    def assign_slopeunits(self, use_slopeunits=True):
+        if use_slopeunits:
+            # Open and read the file
+            with rasterio.open(self.slopeunitfile) as src:
+                data = src.read(1)  # Read the first band
+                #profile = src.profile  # Metadata
+                #bounds = src.bounds    # Spatial extent
+                crs = src.crs          # Coordinate reference system
+                #nodata = src.nodata
+                transform = src.transform
+            
+            # Calculate slopeunits grid# Create coordinate arrays using the transform
+            height, width = data.shape
+            x = np.arange(0, width) * transform.a + transform.c
+            y = np.arange(0, height) * transform.e + transform.f
+
+            # Convert y to match array orientation
+            xv, yv = np.meshgrid(x, y)
+            
+            
+            # Converter til lat/lon
+            transformer = Transformer.from_crs(f"EPSG:{self.UTM_epsg_code}" ,"EPSG:4326" , always_xy=True)
+            eastings, northings = self.vertices[:,0].numpy(), self.vertices[:,1].numpy()
+            lons, lats = transformer.transform(eastings, northings)
+            
+            # Converter til slopeunits grid, kan spare tid ved å sjekke først om disse er det samme!
+            transformer2 = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+            easting2, northing2 = transformer2.transform(lons, lats)
+            points2 = np.vstack([easting2, northing2]).T
+            
+            # Flatten and stack the xv and yv coordinate grids
+            grid_points = np.vstack([xv.flatten(), yv.flatten()]).T
+                
+            # Build the KD-tree once
+            tree = cKDTree(grid_points)
+
+            self.slopeunits = np.empty(len(self.tri.simplices))
+            for i in range(len(self.tri.simplices)):
+                #print(i)
+                center = points2[self.tri.simplices][i, :].mean(axis=0)
+                dist, closest_index = tree.query(center)
+                self.slopeunits[i] = data.flatten().data[closest_index]
+        else:
+            self.slopeunits = -1*np.ones((self.tri.simplices))
+            
+
+    def poly_slopes(self, rundir):
+        # list of all triangles
+        utriangles = np.arange(len(self.tri.simplices))
+        
+        upstream_dict = {}
+        while len(utriangles) > 0:
+            tlist = get_all_upstream(utriangles[0],-1)
+            upstream_dict[utriangles[0]] = tlist
+            # remove those found from the list
+            for i in tlist:
+                utriangles = np.delete(utriangles, np.where(utriangles == i))
+        
+        np.save(os.path.join(rundir, "triangulation", "poly_slopes.npy"), upstream_dict)
+      
+    def get_all_upstream(self, start, last, collected=None):
+        # Calculate all upstream triangles for given start triangle
+        
+        if collected is None:
+            collected = []
+        if start is not None and start not in collected and start > -1:  # avoid duplicates or infinite loops
+            collected.append(start)
+            #print('#######' + str(start)+'##########' + str(last))
+            upstream = self.get_upstream_triangles(start)
+            for i in upstream:
+                collected = get_all_upstream(i, start, collected)
+
+        return collected
 
 
 class Triangulation:
@@ -394,6 +478,7 @@ class Triangulation:
         self.is_interior = self.mesh.cell_data["is_interior"][0] == 1
         self.triangles = self.mesh.cells_dict["triangle"]
         self.n_triangles = self.triangles.shape[0]
+        self.slopeunits = self.mesh.cell_data["slopeunits"][0]
         self.logger.info(f"n_triangles: {self.n_triangles}")
         
         self.logger.info("Calculate vertice locations (easting, northing) using projection EPSG:{self.utm_epsg_code}.")
