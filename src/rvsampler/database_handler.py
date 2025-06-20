@@ -42,7 +42,10 @@ VOLUMES_SCHEMA = {
     "thickness": "REAL",
     "tsunami_potential_ratio": "REAL",
     "no2d": "REAL",
-    "slopeunit": "INTEGER"
+    "slopeunit": "INTEGER",
+    "cluster": "INTEGER",
+    "cluster_center_dist": "REAL",
+    "is_representative": "BOOLEAN",
 }
 
 def main():
@@ -139,7 +142,7 @@ def write_raster(volume, tri_mask, tri_profile, resdir, raster_driver="AAIGrid",
 # for calculating the boundary boxes for the clusters   
 def Bingclaw_gridsize(volume, upstream_dict, lon_tri, lat_tri, tri_mask):
     """ 
-    Calculate boundaing box for bingclaw simulations. 
+    Calculate bounding box for bingclaw simulations. 
     Calculations are based on polygons made from upstream triangles. All polygons covering the 
     the seed triangle is used to define the extent of the simulation grid.
     """
@@ -299,7 +302,6 @@ class VolumeDatabaseHandler:
                 thickness,
                 tsunami_potential_ratio,
                 no2d
-                
             ))
             self.conn.commit()
         except Exception as e:
@@ -313,23 +315,38 @@ class VolumeDatabaseHandler:
         V = 0.0298*A^{1.36}
         
         Estimate tsunami potential:
-        Based on equations of Watts et al. (2005). 
-        V_{min}=0.0957*slope^{-1.609}*H^{1.3807} where V_{min} is the minimum volume
-        that can create a significant tsunami for a given water depth H (in m) and slope angle
-        (in degrees) and V_{min} in Mm^{3}.
+        Equation for maximum sea level depression.
         
-        Note: This ratio goes to infinity as H goes to zero.
+        eta_0,2D = 0.2139d[1 - 0.7458sin(theta) + 0.1704sin(theta)^2](Lsin(theta)/H)^(5/4)
+        
+        where d[m] is the thickness of the landslide, theta is the slope angle,
+        L[m] is the length of the landslide, and H[m] is the water depth.
+        Watts et al. (2003):
+        
+        Estimate tsunami potential ratio:
+        
+        V_{min}=0.0957*slope^{-1.609}*H^{1.3807} 
+        
+        where V_{min} is the minimum volume that can create a significant tsunami for a given water depth H (in m) and slope angle
+        (in degrees) and V_{min} in Mm^{3}. Based on equations of Watts et al. (2003). 
+        
+        Note: This ratio goes to infinity as H goes to zero. Therefore, we truncate H at -1 m (a small negative value)
+        to avoid division by zero errors.
         """
         volume = 0.0298*area**1.36
         thickness = volume/area
-        tsunami_potential_ratio = volume/(0.0957*(mean_slope**-1.609)*((0-mean_elevation)**1.3807)*1e6)
         
-        # no2d
+        if mean_elevation >= -1.0:
+            self.logger.warning(f"Mean elevation is non-negative: {mean_elevation}. Setting elevation to -1.")
+            mean_elevation = -1.  # Set to a small negative value to avoid division by zero.
+        
         L = np.sqrt(area) # Asume A = L*L
         mean_slope_rad = mean_slope*np.pi/180
-        no2d = 0.2139*thickness*(1-0.7458*np.sin(mean_slope_rad)+0.1704*(np.sin(mean_slope_rad))**2)*(L*np.sin(mean_slope_rad)/(0-mean_elevation))**(5/4)
         
-        return(volume, thickness, tsunami_potential_ratio, no2d)
+        eta = 0.2139*thickness*(1-0.7458*np.sin(mean_slope_rad)+0.1704*(np.sin(mean_slope_rad))**2)*(L*np.sin(mean_slope_rad)/(0-mean_elevation))**(5/4)
+        tsunami_potential_ratio = volume/(0.0957*(mean_slope**-1.609)*((0-mean_elevation)**1.3807)*1e6)
+        
+        return(volume, thickness, tsunami_potential_ratio, eta)
     
 
     def load_probabilities_from_shakemap(self, displacement_threshold, table_filename, column_name = "p_shake"):

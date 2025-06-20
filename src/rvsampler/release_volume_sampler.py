@@ -150,7 +150,7 @@ class RecursiveReleaseAnalysis:
         #p2 = points[self.triangles][:,1,:]
         #p3 = points[self.triangles][:,2,:]
         
-        seed_triangles = seed_triangles[:10]
+        #seed_triangles = seed_triangles[:10]
 
         for ist, ss in enumerate(seed_triangles):
             distances = np.linalg.norm(points[self.triangulation.triangles[ss]].mean(axis=0) - points[self.triangulation.triangles[seed_triangles]].mean(axis=1), axis=1)

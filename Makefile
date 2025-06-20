@@ -5,7 +5,7 @@
 # make volumes rootdir=c:/ROOTDIR
 ROOTDIR ?= /home/ebr/projects/release-volume-sampler
 REGION ?= messina_003
-RUNDIR ?= $(ROOTDIR)/generated/$(REGION) # Defined path in preparational.py
+RUNDIR ?= $(ROOTDIR)/generated/$(REGION)# Defined path in preparational.py
 
 # Multistep proceedures - Parameters set in python scripts
 # nohup poetry run python src/preparational.py --ROOTDIR $(ROOTDIR) --RUNDIR $(RUNDIR) > output_vol.log 2>&1 &
@@ -44,6 +44,13 @@ plots:
 		poetry run python -m src.plot "$$folder"; \
 	done
 
+clean-folder:
+	@if [ -z "$(FOLDER)" ]; then \
+		echo "Usage: make clean-folder FOLDER=subfolder_name"; \
+		exit 1; \
+	fi; \
+	echo "Deleting $(RUNDIR)/$(FOLDER)"; \
+	rm -rf "$(RUNDIR)/$(FOLDER)"
 
 clean:
 	@echo " Delete all output in $(RUNDIR)..."
@@ -55,8 +62,9 @@ help:
 	@echo "Usage:"
 	@echo "  make volumes - Run preparational script - Creates volume database."
 	@echo "  make probabilities - Run operational script - Assigns probabilities to volumes."
-	@echo "  make clean - Empty generated folder."
 	@echo "  make plots - Plot rasters."
+	@echo "  make clean - Empty generated folder."
+	@echo "  make clean-folder - Empty subfolder of the rundir. Usage: make clean-folder FOLDER=subfolder_name"
 	@echo "  make help - Display this help message."
 
-.PHONY: clean help volumes probabilities
+.PHONY: clean help volumes probabilities clean-folder plots
