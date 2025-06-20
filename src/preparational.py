@@ -54,10 +54,10 @@ def main():
 
     rundir = initialize(**config)    
         
-    #execute_slope_analysis(rundir)
-    #triangulate_domain(rundir)
+    execute_slope_analysis(rundir)
+    triangulate_domain(rundir)
     sample_release_volumes(rundir) 
-    sys.exit(0)
+    
 
     # Write the volumes to csv
     with VolumeDatabaseHandler(rundir) as volumes_db:
@@ -67,15 +67,16 @@ def main():
         #                                            column_name = "p_shake")
     
         volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
-        #volumes_db.write_volumes_to_rasters(**filter_config)
+        volumes_db.write_volumes_to_rasters(**filter_config)
         
         #volumes_db.plot_distribution()
         #volumes_db.plot_release_density_plots()
         
         #volumes_db.plot_distribution(seed_prob="p_shake")
         #volumes_db.plot_release_density_plots(seed_prob="p_shake")
-        
-
+      
+    sys.exit(0)
+    
     # Cluster the volumes into n_clusters, use the csv for now, but might be faster to use the already
     # opened db?
     volumes_csv = os.path.join(resdir, 'volumes', "volumes.csv")
@@ -85,9 +86,7 @@ def main():
     print('Cluster_volumes')
     cluster_volumes(volumes_csv, tri_tif, bath_tif, resdir, upstream_dict_path)
     
-    """
-=======
->>>>>>> a64cbd6d4a7e0c52715b67299587f331f1f6e7fa
+
    
     
 def initialize(generated, region, bathyfile, soilregions_filename, soil_parameters_filename, singularity_image):
@@ -168,6 +167,7 @@ def triangulate_domain(rundir):
     triang.plot_triangulation()
     triang.assign_slopeunits()
     triang.write_to_file()
+    triang.poly_slopes()
     
     # Calculate cumulative probabilities lookup table by triangle
     cumulative_dir = os.path.join(rundir, "slope_analysis", "fos", "cumulative")
@@ -193,44 +193,18 @@ def sample_release_volumes(rundir):
         "recursive_probability_threshold": 0.001,
         "seed_triangle_probability_threshold": 0.005,
         "max_n_seed_triangles": 100,
+        "use_slopeunits": True,
+        "max_n_slopeunits": 5
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)
     # make slope polygons and save to file for use in operational.py - this is used for evaluating possible 
     # slide scenarios and can be used for making the computational grid for bingclaw
-    poly_slopes(rundir, analysis)
+    #poly_slopes(rundir, analysis)
     
     analysis.run(**run_config)
     
-# TDOD: EBR-2023-10-30: These functions should be moved to database_handler.py.
-def poly_slopes(rundir, analysis):
-    # list of all triangles
-    utriangles = np.arange(analysis.triangulation.n_triangles)
-    
-    upstream_dict = {}
-    while len(utriangles) > 0:
-        #print(len(utriangles))
-        tlist = get_all_upstream(utriangles[0],-1,analysis)
-        upstream_dict[utriangles[0]] = tlist
-        # remove those found from the list
-        for i in tlist:
-            utriangles = np.delete(utriangles, np.where(utriangles == i))
-    
-    np.save(os.path.join(rundir, "triangulation", "poly_slopes.npy"), upstream_dict)
-  
-def get_all_upstream(start, last, analysis, collected=None):
-    # Calculate all upstream triangles for given start triangle
-    
-    if collected is None:
-        collected = []
-    if start is not None and start not in collected and start > -1:  # avoid duplicates or infinite loops
-        collected.append(start)
-        #print('#######' + str(start)+'##########' + str(last))
-        upstream = analysis.triangulation.get_upstream_triangles(start)
-        for i in upstream:
-            collected = get_all_upstream(i, start, analysis, collected)
 
-    return collected
 
 
 if __name__ == "__main__":
