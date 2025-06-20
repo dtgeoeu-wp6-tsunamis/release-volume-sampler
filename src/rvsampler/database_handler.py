@@ -10,6 +10,7 @@ from scipy.interpolate import interp1d
 import cartopy.crs as ccrs
 import sqlite3
 import csv
+import ast
 
 from rvsampler.set_logg import setup_logger
 from rvsampler.utils import create_dir
@@ -110,17 +111,22 @@ def write_raster(volume, tri_mask, tri_profile, resdir, raster_driver="AAIGrid",
         else:
             cropped_raster = volume_raster
             profile = tri_profile
+            
+        lst = ast.literal_eval(volume["seed_triangles"])  # Converts to [1, 2, 3, 4]
+        st_str = '-'.join(map(str, lst))
         volume_path = os.path.join(
         resdir,
-        f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}-{volume["seed_triangle2"]}-{"crop"}{SUFFIX_MAP[raster_driver]}'
+        f'rasters/volume_id-{volume["id"]}_seed-{st_str}-{"crop"}{SUFFIX_MAP[raster_driver]}'
     )
     else:
         cropped_raster = volume_raster
         profile = tri_profile
 
+        lst = ast.literal_eval(volume["seed_triangles"])  # Converts to [1, 2, 3, 4]
+        st_str = '-'.join(map(str, lst))
         volume_path = os.path.join(
             resdir,
-            f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}-{volume["seed_triangle2"]}{SUFFIX_MAP[raster_driver]}'
+            f'rasters/volume_id-{volume["id"]}_seed-{st_str}{SUFFIX_MAP[raster_driver]}'
         )
     
     # Set nodata value
@@ -148,11 +154,11 @@ def Bingclaw_gridsize(volume, upstream_dict, lon_tri, lat_tri, tri_mask):
     """
     
     # Find all polygons in the upstream_dict that covers the seed triangle
-    matching_keys = [k for k, v in upstream_dict.items() if volume["seed_triangle"] in v]
-
-    if volume["seed_triangle2"] != -1:
-        matching_keys2 = [k for k, v in upstream_dict.items() if volume["seed_triangle2"] in v]
-        matching_keys += matching_keys2  # Extends the list
+    matching_keys = []
+    for seed_triangle in ast.literal_eval(volume['seed_triangles']):
+        for k, v in upstream_dict.items():
+            if seed_triangle in v:
+                matching_keys.append(k)
     
     
     
@@ -285,9 +291,9 @@ class VolumeDatabaseHandler:
             self.cursor.execute("""
                 INSERT INTO volumes (
                     released, condprob, area, mean_elevation, mean_easting, mean_northing, mean_slope,
-                    seed_triangles, p_fos_seed, volume, thickness, tsunami_potential_ratio, no2d
+                    seed_triangles, p_fos_seed, volume, thickness, tsunami_potential_ratio, no2d, slopeunit
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 json.dumps(volume_data["released"]),  # Serialize list to JSON
                 volume_data["condprob"],
@@ -301,7 +307,8 @@ class VolumeDatabaseHandler:
                 volume,
                 thickness,
                 tsunami_potential_ratio,
-                no2d
+                no2d,
+                volume_data["slopeunit"]
             ))
             self.conn.commit()
         except Exception as e:

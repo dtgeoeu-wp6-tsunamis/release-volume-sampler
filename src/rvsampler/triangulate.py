@@ -39,6 +39,7 @@ def main():
     triang.plot_triangulation()
     triang.assign_slopeunits()
     triang.write_to_file()
+    triang.poly_slopes()
     
 
 
@@ -56,6 +57,7 @@ class Triangulate:
         """
 
         # Load real raster data
+        self.rundir = rundir
         self.output_dir = os.path.join(rundir, "triangulation")
         create_dir(self.output_dir)
         self.logger = setup_logger("triangulate", self.output_dir)
@@ -420,21 +422,21 @@ Area loss: {area_weight*area_loss.numpy():.10e}
             self.slopeunits = -1*np.ones((self.tri.simplices))
             
 
-    def poly_slopes(self, rundir):
+    def poly_slopes(self):
         # list of all triangles
         utriangles = np.arange(len(self.tri.simplices))
-        
+        tri = Triangulation(self.rundir)
         upstream_dict = {}
         while len(utriangles) > 0:
-            tlist = get_all_upstream(utriangles[0],-1)
+            tlist = self.get_all_upstream(utriangles[0],-1,tri)
             upstream_dict[utriangles[0]] = tlist
             # remove those found from the list
             for i in tlist:
                 utriangles = np.delete(utriangles, np.where(utriangles == i))
         
-        np.save(os.path.join(rundir, "triangulation", "poly_slopes.npy"), upstream_dict)
+        np.save(os.path.join(self.output_dir, "poly_slopes.npy"), upstream_dict)
       
-    def get_all_upstream(self, start, last, collected=None):
+    def get_all_upstream(self, start, last, tri, collected=None):
         # Calculate all upstream triangles for given start triangle
         
         if collected is None:
@@ -442,9 +444,10 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         if start is not None and start not in collected and start > -1:  # avoid duplicates or infinite loops
             collected.append(start)
             #print('#######' + str(start)+'##########' + str(last))
-            upstream = self.get_upstream_triangles(start)
+            
+            upstream = tri.get_upstream_triangles(start)
             for i in upstream:
-                collected = get_all_upstream(i, start, collected)
+                collected = self.get_all_upstream(i, start, tri, collected)
 
         return collected
 
@@ -552,7 +555,8 @@ class Triangulation:
         upstream_triangles = self.neighbours[released_triangle, self.grads[released_triangle, :] > 0]
         released_is_downstream = self.grads[upstream_triangles][self.neighbours[upstream_triangles] == released_triangle] < 0
         upstream_is_interior = self.is_interior[upstream_triangles]
-        return upstream_triangles[released_is_downstream & upstream_is_interior].astype(int)
+        upstream_same_slopeunit = self.slopeunits[upstream_triangles] == self.slopeunits[released_triangle]
+        return upstream_triangles[released_is_downstream & upstream_is_interior & upstream_same_slopeunit].astype(int)
 
 if __name__ == "__main__":
     main()

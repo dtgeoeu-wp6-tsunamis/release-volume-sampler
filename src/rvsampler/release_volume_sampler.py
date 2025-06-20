@@ -9,6 +9,11 @@ from rvsampler.set_logg import setup_logger
 from rvsampler.database_handler import VolumeDatabaseHandler
 from rvsampler.triangulate import Triangulation
 
+import math
+from math import comb  
+import itertools
+from collections import defaultdict
+import random
 
 def main():
     """ To ensure that module imports work, 
@@ -112,7 +117,7 @@ class RecursiveReleaseAnalysis:
     def get_cumulative_logfos(self, triangle, threshold):
         return np.interp(threshold, xp = self.cumprob_thresholds, fp = self.cumprob_logfos[triangle,:], left=0., right=1.)
     
-    def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles, recursive_probability_threshold):
+    def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles, recursive_probability_threshold, use_slopeunits=True, max_n_slopeunits=5):
         
         # Asssign class variables to Release. 
         Release.fos_threshold = fos_threshold             # To assign probability of released upstream triangles.
@@ -128,53 +133,92 @@ class RecursiveReleaseAnalysis:
         all_triangles = np.arange(self.triangulation.n_triangles)
         seed_probability = np.array([self.get_cumulative_logfos(triangle, np.log10(Release.fos_threshold)) for triangle in all_triangles])
         seed_triangles = all_triangles[np.logical_and(seed_probability > seed_triangle_probability_threshold, seed_probability != 9999.0)]
-        # Limit number of seed triangles
-        if len(seed_triangles) > max_n_seed_triangles:
-            self.logger.warning(f"Number of seed triangles ({len(seed_triangles)}) exceeds max_n_seed_triangles ({max_n_seed_triangles}). Limiting to max_n_seed_triangles.")
-            seed_triangles = np.random.choice(seed_triangles, size=max_n_seed_triangles, replace=False)
+
         
-        #print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
-        #print(len(seed_triangles))
-        #print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
-        #trast
         
         self.logger.info(f"Found {len(seed_triangles)} seed triangles.")
         
-        # Also calculate seed triangle pairs
-        st_pairs = set()
-        
-        # Coordinates
-        points = np.vstack([self.triangulation.easting, self.triangulation.northing]).T
-
-        #p1 = points[self.triangles][:,0,:]
-        #p2 = points[self.triangles][:,1,:]
-        #p3 = points[self.triangles][:,2,:]
-        
-        #seed_triangles = seed_triangles[:10]
-
-        for ist, ss in enumerate(seed_triangles):
-            distances = np.linalg.norm(points[self.triangulation.triangles[ss]].mean(axis=0) - points[self.triangulation.triangles[seed_triangles]].mean(axis=1), axis=1)
+        # Use slopeunits file for checking seed triangles that are dependent
+        if use_slopeunits:
+            # Read slopeunit file
             
-            within_1km_indices = np.where(distances <= 1000)[0]
             
-            for i in seed_triangles[within_1km_indices]:
-                other = i
-                if ss != other:  # remove self-pairs
-                    pair = tuple(sorted((ss, other)))  # sort to handle (a,b) == (b,a)
-                    st_pairs.add(pair)
+            # Step 1: Group seed_triangles by their slopeunit
+            grouped = defaultdict(list)
+            for tri, su in zip(seed_triangles, self.triangulation.slopeunits[seed_triangles]):
+                grouped[su].append(tri)
+              
+            """   This code can be used to asses how many seed triangles that can happen simultaneously, to many will lead to
+            an insande amount of combinations
+            MAX_R = 4
+            def count_limited_combinations(n, max_r):
+                return sum(comb(n, r) for r in range(1, min(n, max_r)+1))
+
+            total_combinations = sum(count_limited_combinations(size, MAX_R) for size in group_sizes.values())
+            print(f"Total number of combinations (r ≤ {MAX_R}): {total_combinations}")
+            """
+            
+            # Limit number of slopeunit groups
+            all_groups = list(grouped.values())
+            random_subset = random.sample(all_groups, min(max_n_slopeunits, len(all_groups)))
+            
+            # Step 2: For each group, generate combinations
+            MAX_R = 2  # max combination size (adjust as needed)
+
+            all_combinations = []
+            for vals in random_subset:
+                if len(vals) == 0:
+                    continue
+                for r in range(1, min(MAX_R+1, len(vals)+1)):
+                    all_combinations.extend(itertools.combinations(vals, r))
+                    
+            seed_triangles = [list(map(int, combo)) for combo in all_combinations]
+
+        else:
         
-        #st_pairs = set(list(st_pairs)[:50])
-        
+            # Also calculate seed triangle pairs
+            st_pairs = set()
+            
+            # Coordinates
+            points = np.vstack([self.triangulation.easting, self.triangulation.northing]).T
+            
+            for ist, ss in enumerate(seed_triangles):
+                distances = np.linalg.norm(points[self.triangulation.triangles[ss]].mean(axis=0) - points[self.triangulation.triangles[seed_triangles]].mean(axis=1), axis=1)
+                
+                within_1km_indices = np.where(distances <= 1000)[0]
+                
+                for i in seed_triangles[within_1km_indices]:
+                    other = i
+                    if ss != other:  # remove self-pairs
+                        pair = tuple(sorted((ss, other)))  # sort to handle (a,b) == (b,a)
+                        st_pairs.add(pair)
+            
+                        
+            
+            
+        # Convert seed_triangles to a list of lists
+        if not use_slopeunits:
+            seed_triangles = [[x] for x in seed_triangles]
+            # add pairs
+            seed_triangles.extend([list(t) for t in st_pairs])
+            seed_triangles = [[int(x) for x in sublist] for sublist in seed_triangles]
+         
+         
+        # Limit the number of seed triangles       
+        if len(seed_triangles) > max_n_seed_triangles:
+            self.logger.warning(
+                f"Number of seed triangles ({len(seed_triangles)}) exceeds max_n_seed_triangles ({max_n_seed_triangles}). "
+                "Limiting to max_n_seed_triangles."
+            )
+            seed_triangles = random.sample(seed_triangles, k=max_n_seed_triangles)    
        
         with VolumeDatabaseHandler(self.rundir) as volumes_db:
-            sample_pairs = False
-            for seed_triangle in seed_triangles:
-                
+            for seed_triangle in seed_triangles:        
                 volumes = []
-                # Initiate recursion for the given seed.
+                # Initiate recursion for the given seed.                       
                 release = Release(triangulation=self.triangulation, 
                                   sampler=self, 
-                                  released=[int(seed_triangle)], 
+                                  released=seed_triangle, 
                                   released_at_step = [0], 
                                   probability = 1., 
                                   step = 1)
@@ -183,40 +227,13 @@ class RecursiveReleaseAnalysis:
                 release.write_release(volumes)
                 
                 # Append features
-                self.append_features_to_volumes(volumes, [int(seed_triangle)], seed_probability[seed_triangle])
+                self.append_features_to_volumes(volumes, seed_triangle, float(math.prod(seed_probability[seed_triangle])))
                 
                 # Add volumes to database
                 for volume in volumes:
                     volumes_db.insert_volume(volume_data=volume)
                     
             self.logger.info(f"Finished single triangle initiation. Total: {len(seed_triangles)} seed triangles.")
-            if sample_pairs:
-                for pair in st_pairs:
-                    volumes2 = []
-                    # Initiate recursion for the given seed.
-                    pair2 = [int(x) for x in pair] # Convert to list
-                    release = Release(triangulation=self.triangulation,
-                                      sampler=self,
-                                      released=pair2, 
-                                      released_at_step = [0], 
-                                      probability = 1., 
-                                      step = 1)
-                    
-                    # traverse the released volumes.
-                    release.write_release(volumes2)
-                    
-                    # Append features
-                    for volume in volumes2:
-                        volume["area"] = self.triangulation.areas[volume["released"]].sum()
-                        volume["mean_elevation"] = float(self.triangulation.elevation[self.triangulation.triangles[volume["released"]].flatten()].mean()) # Elevation is point data.
-                        volume["mean_slope"] = self.triangulation.slopes[volume["released"]].mean()
-                        volume["seed_triangle"] = int(pair2[0])#", ".join(str(x) for x in pair2)
-                        volume["seed_triangle2"] = int(pair2[1])#", ".join(str(x) for x in pair2)
-                        volume["p_fos_seed"] = seed_probability[pair2[0]]*seed_probability[pair2[1]]
-                    
-                    # Add volumes to database
-                    for volume in volumes2:
-                        volumes_db.insert_volume(volume_data=volume)
     
     def append_features_to_volumes(self, volumes, seed_triangles, p_fos_seed):
         """
