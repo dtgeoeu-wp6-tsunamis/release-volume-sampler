@@ -42,11 +42,12 @@ def main():
     #inputfolder = rundir + "input"
     config = {
         "rundir": rundir,
-        "singularity_image": os.path.join(rootdir,"images/grass.sif"),
-        "bathyfile": os.path.join(rootdir,'input', "bathy/localMessinaBathy.tif"),
+        "singularity_image": os.path.join(rootdir,"images", "grass.sif"),
+        "bathyfile": os.path.join(rootdir,'input', "bathy", "localMessinaBathy.tif"),
         "soilregions_filename": os.path.join(rootdir,'input', 'soilparams','regions.tif'),
         "soil_parameters_filename": os.path.join(rootdir,'input', 'soilparams','params.json'),
         "logger": logger,
+        "slopeunitfile": os.path.join(rootdir, 'input', 'slopeunits', 'slumap.tif'),
     }
     logger.info(f"Configuration: {config}")
     # Run steps if not already done.
@@ -68,20 +69,13 @@ def main():
         sample_release_volumes(rundir)
         
     sys.exit(0)
+
     filter_config = {
         "tsunami_potential_ratio_threshold": 1.,
         "max_rasters": 10,
         "raster_driver": 'GTiff', # GTiff/AAIGrid
     }
     
-
-    rundir = initialize(**config)    
-        
-    execute_slope_analysis(rundir)
-    triangulate_domain(rundir)
-    sample_release_volumes(rundir) 
-    
-
     # Write the volumes to csv
     with VolumeDatabaseHandler(rundir) as volumes_db:
         # This is now written in a seperate file in operational.py
@@ -110,14 +104,15 @@ def main():
     cluster_volumes(volumes_csv, tri_tif, bath_tif, resdir, upstream_dict_path)
     
    
-def initialize(rundir, bathyfile, soilregions_filename, soil_parameters_filename, singularity_image, logger):
+def initialize(rundir, bathyfile, soilregions_filename, soil_parameters_filename, singularity_image, logger, slopeunitfile=None):
     
     logfile = os.path.join(rundir, "preparational_external_software.txt")
     
     # Copy soilparameterfiles to rundir
     shutil.copy(soilregions_filename, os.path.join(rundir, "soilregions.tif"))
     shutil.copy(soil_parameters_filename, os.path.join(rundir, "soilparams.json"))
-    
+    if slopeunitfile is not None:
+        shutil.copy(slopeunitfile, os.path.join(rundir, "slumap.tif"))
 
     # Assert that the raster is in a geographic (lon-lat) coordinate system
     logger.info("Verifying that input bathymetri is logitude-latitude.")
@@ -171,7 +166,7 @@ def triangulate_domain(rundir):
         "bathyfile": "bathy_truncated.tif",
         "utm_epsg_code": 32633, #Messina strait
         "resolution": (110, 110),
-        "slopeunitfile": os.path.join(rundir,'..','slopeunits',"slumap_clean_utm.tif"),
+        "slopeunitfile": os.path.join(rundir, "slumap.tif"),
     }
     optimization_params = {
         "num_iterations": 2000,
@@ -211,7 +206,7 @@ def sample_release_volumes(rundir):
         "recursive_probability_threshold": 0.001,
         "seed_triangle_probability_threshold": 0.005,
         "max_n_seed_triangles": 100,
-        "use_slopeunits": True,
+        "use_slopeunits": False,
         "max_n_slopeunits": 5
     }
     # Execute analysis.
