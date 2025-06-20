@@ -31,20 +31,43 @@ def main():
     args = parser.parse_args()
     region = args.region
     rootdir = args.rootdir
+    rundir = os.path.join(rootdir, 'generated', region)
     
+    logger = setup_logger("preparational", rundir)
+    create_dir(rundir, logger)
     # --rundir /home/sfr/release-volume-sampler
     #rundir = r'/home/sfr/release-volume-sampler'
+    logger.info(f"Running preparational script for region {region} in {rundir}")
     
     #inputfolder = rundir + "input"
     config = {
-        "generated": os.path.join(rootdir,"generated"), 
-        "region":region,
+        "rundir": rundir,
         "singularity_image": os.path.join(rootdir,"images/grass.sif"),
         "bathyfile": os.path.join(rootdir,'input', "bathy/localMessinaBathy.tif"),
         "soilregions_filename": os.path.join(rootdir,'input', 'soilparams','regions.tif'),
         "soil_parameters_filename": os.path.join(rootdir,'input', 'soilparams','params.json'),
+        "logger": logger,
     }
-    
+    logger.info(f"Configuration: {config}")
+    # Run steps if not already done.
+    if os.path.exists(os.path.join(rundir, "slope.tif")):
+        logger.info("Initialization already done, skipping.")
+    else:
+        initialize(**config)
+    if os.path.exists(os.path.join(rundir, "slope_analysis", "slopeanalysis.log")):
+        logger.info("Slope analysis already done, skipping.")
+    else:
+        execute_slope_analysis(rundir)
+    if os.path.exists(os.path.join(rundir, "triangulation", "triangulate.log")):
+        logger.info("Triangulation already done, skipping.")
+    else:
+        triangulate_domain(rundir)
+    if os.path.exists(os.path.join(rundir, "volumes","volume_sampler.log")):
+        logger.info("Release volume sampling already done, skipping.")
+    else:
+        sample_release_volumes(rundir)
+        
+    sys.exit(0)
     filter_config = {
         "tsunami_potential_ratio_threshold": 1.,
         "max_rasters": 10,
@@ -86,15 +109,10 @@ def main():
     print('Cluster_volumes')
     cluster_volumes(volumes_csv, tri_tif, bath_tif, resdir, upstream_dict_path)
     
-
    
+def initialize(rundir, bathyfile, soilregions_filename, soil_parameters_filename, singularity_image, logger):
     
-def initialize(generated, region, bathyfile, soilregions_filename, soil_parameters_filename, singularity_image):
-    
-    rundir =  os.path.join(generated, region)
-    logfile = os.path.join(rundir, "log.txt")
-    logger = setup_logger("preparational", rundir)
-    create_dir(rundir, logger)
+    logfile = os.path.join(rundir, "preparational_external_software.txt")
     
     # Copy soilparameterfiles to rundir
     shutil.copy(soilregions_filename, os.path.join(rundir, "soilregions.tif"))

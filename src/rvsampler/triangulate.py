@@ -254,10 +254,11 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         )
         # Convert pixel indices to UTM coordinates
         lons, lats = rasterio.transform.xy(self.src.transform, row_indices, col_indices)
+        lons, lats = np.array(lons), np.array(lats)
         lons = lons.reshape(row_indices.shape)
         lats = lats.reshape(row_indices.shape)
         
-        eastings, northings = self.lonlat_to_meters(np.array(lons), np.array(lats))
+        eastings, northings = self.lonlat_to_meters(lons, lats)
         mask = self.bathy_msk[row_indices, col_indices]
         
         # Add extra boundry vertices to ensure that the entire region is contained in triangulation.
