@@ -1,12 +1,11 @@
 # Makefile for Singularity container management
 
-
 # Variables
-IMAGE_DIR ?= /home/sfr/release-volume-sampler/images
+IMAGE_DIR ?= /home/ebr/projects/release-volume-sampler/images
 IMAGE_NAME = grass.sif
 DEF_FILE = grass.def
 IMAGE_PATH = $(IMAGE_DIR)/$(IMAGE_NAME)
-RUNDIR ?= /home/sfr/release-volume-sampler/generated/messina_001
+RUNDIR ?= /home/ebr/projects/release-volume-sampler/generated/messina_001
 
 # Build the Singularity container
 build:

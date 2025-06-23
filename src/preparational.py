@@ -3,10 +3,6 @@ import numpy as np
 import shutil
 import rasterio
 import argparse
-import pandas as pd
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
-from scipy.spatial.distance import cdist
 import sys
 
 # Import from modules.
@@ -16,6 +12,8 @@ from rvsampler.triangulate import Triangulate
 from rvsampler.cumprobs_by_triangle import caclulate_cumulative_probabilities
 from rvsampler.release_volume_sampler import RecursiveReleaseAnalysis
 from rvsampler.database_handler import VolumeDatabaseHandler, write_raster, Bingclaw_gridsize
+from rvsampler.cluster import ClusterAnalysis
+
 from rvsampler.utils import create_dir
 from rvsampler.set_logg import setup_logger
 
@@ -67,6 +65,10 @@ def main():
         logger.info("Release volume sampling already done, skipping.")
     else:
         sample_release_volumes(rundir)
+    if os.path.exists(os.path.join(rundir, "cluster_analysis", "cluster.log")):
+        logger.info("Clustering allready done, skipping.")
+    else:
+        cluster_release_volumes(rundir)
         
     sys.exit(0)
 
@@ -218,6 +220,35 @@ def sample_release_volumes(rundir):
     analysis.run(**run_config)
     
 
+def cluster_release_volumes(rundir):
+    
+    config = {
+        "rundir": rundir,
+        "n_clusters": 500,
+        "random_state": 0,
+        "batch_size": 1000,
+        "feature_columns": ['area', 'no2d', 'mean_elevation',
+                            'mean_northing', 'mean_easting'],
+        "columns_to_scale": ['area', 'no2d', 'mean_elevation',
+                             'mean_northing', 'mean_easting'],
+        "weights": {
+            'area': 1.0,
+            'no2d': 1.0,
+            'mean_elevation': 1.0,
+            'mean_northing': 1.0,
+            'mean_easting': 1.0
+        },
+    }
+    # Initialize ClusterAnalysis object
+    cluster_analysis = ClusterAnalysis(**config)    
+    # Fit the clustering model
+    cluster_analysis.fit()
+    # Write cluster label database
+    cluster_analysis.write_to_database()
+    # Find representatives and write to database
+    cluster_analysis.find_representatives()
+    # Close the database connection
+    cluster_analysis.close()
 
 
 if __name__ == "__main__":

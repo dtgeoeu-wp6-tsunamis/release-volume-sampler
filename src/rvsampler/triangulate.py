@@ -45,7 +45,7 @@ def main():
 
 class Triangulate:
     
-    def __init__(self, rundir, bathyfile, utm_epsg_code, resolution, slopeunitfile):
+    def __init__(self, rundir, bathyfile, utm_epsg_code, resolution, slopeunitfile=None):
         """ Class to triangulate topography subject to optimization of triangle shape, 
             approximation of the topography and equally sized triangles.
      
@@ -54,6 +54,7 @@ class Triangulate:
             bathyfile (str): Path to bathymetry file in geographic coordinates (longitude-latitude).
             utm_epsg_code (int): EPSG code for the projection applied to compute areas and distances.
             resolution (Tuple[int, int]): Grid dimension for the vertices in the initial triangulation.
+            slopeunitfile (str): Path to slope unit file. TODO:Specify coordinates system.
         """
 
         # Load real raster data
@@ -101,7 +102,7 @@ class Triangulate:
         eastings, northings = points[:, 0], points[:, 1]
         
         # Create a transformer to convert UTM to geographic coordinates (lon, lat)
-        transformer = Transformer.from_crs(f"EPSG:{self.UTM_epsg_code}", self.src.crs, always_xy=True)  # Replace 32633 with your UTM zone
+        transformer = Transformer.from_crs(f"EPSG:{self.UTM_epsg_code}", self.src.crs, always_xy=True)
         lons, lats = transformer.transform(eastings, northings)
         rows, cols = rowcol(self.src.transform, lons, lats)
         
@@ -272,10 +273,6 @@ Area loss: {area_weight*area_loss.numpy():.10e}
 
         mask_boundary = is_raster_boundary & mask | mask_buff & ~mask
         mask_interior = mask & ~mask_boundary
-
-        # Added by SFR 24.04.25
-        #mask_boundary = mask_boundary.flatten()
-        #mask_interior = mask_interior.flatten()
 
         interior_points = np.vstack([eastings[mask_interior], northings[mask_interior]]).T
         boundary_points = np.vstack([eastings[mask_boundary], northings[mask_boundary]]).T
