@@ -11,7 +11,7 @@ from rvsampler.slope_analysis import SlopeAnalysis
 from rvsampler.triangulate import Triangulate
 from rvsampler.cumprobs_by_triangle import caclulate_cumulative_probabilities
 from rvsampler.release_volume_sampler import RecursiveReleaseAnalysis
-from rvsampler.database_handler import VolumeDatabaseHandler, write_raster, Bingclaw_gridsize
+from rvsampler.database_handler import VolumeDatabaseHandler
 from rvsampler.cluster import ClusterAnalysis
 
 from rvsampler.utils import create_dir
@@ -69,42 +69,11 @@ def main():
         logger.info("Clustering allready done, skipping.")
     else:
         cluster_release_volumes(rundir)
-        
-    sys.exit(0)
+    if os.path.exists(os.path.join(rundir, "volumes", "volumes.csv")):
+        logger.info("Release volumes already written to csv and rasters, skipping.")
+    else:
+        write_volumes(rundir)
 
-    filter_config = {
-        "tsunami_potential_ratio_threshold": 1.,
-        "max_rasters": 10,
-        "raster_driver": 'GTiff', # GTiff/AAIGrid
-    }
-    
-    # Write the volumes to csv
-    with VolumeDatabaseHandler(rundir) as volumes_db:
-        # This is now written in a seperate file in operational.py
-        #volumes_db.load_probabilities_from_shakemap(displacement_threshold=5., 
-        #                                            table_filename="exceedance_displacement.npz", 
-        #                                            column_name = "p_shake")
-    
-        volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
-        volumes_db.write_volumes_to_rasters(**filter_config)
-        
-        #volumes_db.plot_distribution()
-        #volumes_db.plot_release_density_plots()
-        
-        #volumes_db.plot_distribution(seed_prob="p_shake")
-        #volumes_db.plot_release_density_plots(seed_prob="p_shake")
-      
-    sys.exit(0)
-    
-    # Cluster the volumes into n_clusters, use the csv for now, but might be faster to use the already
-    # opened db?
-    volumes_csv = os.path.join(resdir, 'volumes', "volumes.csv")
-    tri_tif = os.path.join(resdir, 'triangulation', "triangulation.tif")
-    bath_tif = os.path.join(rundir, 'input', 'bathy', 'messina_001', "bathy_truncated.tif")
-    upstream_dict_path = os.path.join(resdir, 'triangulation',"poly_slopes.npy")
-    print('Cluster_volumes')
-    cluster_volumes(volumes_csv, tri_tif, bath_tif, resdir, upstream_dict_path)
-    
    
 def initialize(rundir, bathyfile, soilregions_filename, soil_parameters_filename, singularity_image, logger, slopeunitfile=None):
     
@@ -161,7 +130,6 @@ def execute_slope_analysis(rundir):
     ky_thresholds = np.linspace(-3,1, num=50)
     sa.compute_cumulative(ky_thresholds, feature_name="logky", write=True)
 
-
 def triangulate_domain(rundir):
     config = {
         "rundir": rundir,
@@ -188,7 +156,6 @@ def triangulate_domain(rundir):
     cumulative_dir = os.path.join(rundir, "slope_analysis", "fos", "cumulative")
     outfile_name = "cumulative_fos.npz" # Writes to triangulation dir..
     caclulate_cumulative_probabilities(rundir, cumulative_dir, outfile_name)
-
 
 def sample_release_volumes(rundir):
     
@@ -219,7 +186,6 @@ def sample_release_volumes(rundir):
     
     analysis.run(**run_config)
     
-
 def cluster_release_volumes(rundir):
     
     config = {
@@ -249,6 +215,28 @@ def cluster_release_volumes(rundir):
     cluster_analysis.find_representatives()
     # Close the database connection
     cluster_analysis.close()
+
+def write_volumes(rundir):
+    """ Writes the release volumes to csv and rasters.
+    This is used for further analysis and visualization.
+    """
+    filter_config = {
+        "tsunami_potential_ratio_threshold": 1.,
+        "max_rasters": 100,
+        "raster_driver": 'GTiff', # GTiff/AAIGrid
+    }
+    
+    # Write the volumes to csv
+    with VolumeDatabaseHandler(rundir) as volumes_db:
+    
+        volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
+        volumes_db.write_volumes_to_rasters(**filter_config)
+        
+        #volumes_db.plot_distribution()
+        #volumes_db.plot_release_density_plots()
+        
+        #volumes_db.plot_distribution(seed_prob="p_shake")
+        #volumes_db.plot_release_density_plots(seed_prob="p_shake")
 
 
 if __name__ == "__main__":

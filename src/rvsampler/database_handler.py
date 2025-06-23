@@ -81,129 +81,7 @@ def main():
         volumes_db.plot_distribution(seed_prob="p_shake")
         volumes_db.plot_release_density_plots(seed_prob="p_shake")
 
-#SFR 26.05.2025, Moved this function out of write_volumes_to_rasters so it can be used for writing the
-# rasters from the cluster
-def write_raster(volume, tri_mask, tri_profile, resdir, raster_driver="AAIGrid", crop=True):
-    volume_mask = np.isin(tri_mask, json.loads(str(volume["released"])))
-    volume_raster = convolve2d(volume_mask.astype(float) * volume["thickness"], np.ones((3, 3)) / 9., mode="same")
-    #print(i, max_rasters)
-    if crop:
-        nonzero = np.nonzero(volume_raster)
-        if nonzero[0].size != 0 or nonzero[1].size != 0:
-            row_min, row_max = nonzero[0].min(), nonzero[0].max()
-            col_min, col_max = nonzero[1].min(), nonzero[1].max()
-
-            pad = 10
-            row_min = max(row_min - pad, 0)
-            row_max = min(row_max + pad, volume_raster.shape[0])
-            col_min = max(col_min - pad, 0)
-            col_max = min(col_max + pad, volume_raster.shape[1])
-
-            cropped_raster = volume_raster[row_min:row_max, col_min:col_max]
-            cropped_transform = tri_profile["transform"] * rasterio.Affine.translation(col_min, row_min)
-
-            profile = tri_profile.copy()
-            profile.update({
-                "height": cropped_raster.shape[0],
-                "width": cropped_raster.shape[1],
-                "transform": cropped_transform
-            })
-        else:
-            cropped_raster = volume_raster
-            profile = tri_profile
-            
-        lst = ast.literal_eval(volume["seed_triangles"])  # Converts to [1, 2, 3, 4]
-        st_str = '-'.join(map(str, lst))
-        volume_path = os.path.join(
-        resdir,
-        f'rasters/volume_id-{volume["id"]}_seed-{st_str}-{"crop"}{SUFFIX_MAP[raster_driver]}'
-    )
-    else:
-        cropped_raster = volume_raster
-        profile = tri_profile
-
-        lst = ast.literal_eval(volume["seed_triangles"])  # Converts to [1, 2, 3, 4]
-        st_str = '-'.join(map(str, lst))
-        volume_path = os.path.join(
-            resdir,
-            f'rasters/volume_id-{volume["id"]}_seed-{st_str}{SUFFIX_MAP[raster_driver]}'
-        )
-    
-    # Set nodata value
-    profile.update({
-    "driver": raster_driver,
-    "dtype": rasterio.float32,
-    "count": 1,
-    "nodata": -9999  # Set your NoData value here
-    })
-
-    #print(f"Writing to: {volume_path}")
-    #print(f"Profile: {profile}")
-    os.makedirs(os.path.dirname(volume_path), exist_ok=True)
-    with rasterio.open(volume_path, 'w', **profile) as dst:
-        dst.write(cropped_raster.astype(rasterio.float32), 1)
-    #self.logger.info(f"Wrote volume raster: {volume_path}")
    
-# Calculate boundary box bingclaw grid. Function is moved outside class so it can be used 
-# for calculating the boundary boxes for the clusters   
-def Bingclaw_gridsize(volume, upstream_dict, lon_tri, lat_tri, tri_mask):
-    """ 
-    Calculate bounding box for bingclaw simulations. 
-    Calculations are based on polygons made from upstream triangles. All polygons covering the 
-    the seed triangle is used to define the extent of the simulation grid.
-    """
-    
-    # Find all polygons in the upstream_dict that covers the seed triangle
-    matching_keys = []
-    for seed_triangle in ast.literal_eval(volume['seed_triangles']):
-        for k, v in upstream_dict.items():
-            if seed_triangle in v:
-                matching_keys.append(k)
-    
-    
-    
-    # Merge all polygons into one
-    merged = np.concatenate([upstream_dict[k] for k in matching_keys])
-    # Find all unique triangles from the polygons
-    unique_merged = np.unique(merged)
-    # Get a mask og triangles
-    mask = np.isin(tri_mask, unique_merged)
-    # Get the coordinates of the triangles
-    temp_lon = lon_tri[mask]
-    temp_lat = lat_tri[mask]
-
-    # Compute corners
-    lat_min, lat_max = temp_lat.min(), temp_lat.max()
-    lon_min, lon_max = temp_lon.min(), temp_lon.max()
-
-    dx = lon_max - lon_min
-    dy = lat_max - lat_min
-
-    # Add some extra space outside the polygons 
-    # This could potentially be scaled based on the volume
-    # Where 0.1 is x*volume/reference volume
-    default_diff = 0.025
-    xextra = [default_diff, 0.05, 0.07, 0.09]
-    yextra = [default_diff, 0.05, 0.07, 0.09]
-
-    # This seems to work well for all test cases
-    xe = xextra[1]
-    ye = yextra[1]
-    # This hardcoded and suboptimal, but works for this excat case, but should
-    # be updated in the future
-    if lon_max > 15.6:
-        #xcoords = [lon_min - xe, lon_min - xe, lon_max, lon_max]
-        LONLO = lon_min - xe
-        LONHI = lon_max + default_diff
-    else:
-        #xcoords = [lon_min, lon_min, lon_max + xe, lon_max + xe]
-        LONLO = lon_min - default_diff
-        LONHI = lon_max + xe
-    #ycoords = [lat_min - ye, lat_max, lat_max, lat_min - ye]
-    LATHI = lat_max + default_diff
-    LATLO = lat_min - ye
-        
-    return LONLO, LONHI, LATLO, LATHI
 
 class VolumeDatabaseHandler:
     """
@@ -214,6 +92,7 @@ class VolumeDatabaseHandler:
     2. Assign thickness (Statistically from total area), smooth and create raster files.
     3. Make figures to obtain an overview of the distribution.
     4. Assign probabilities from shakemaps.
+    5. Write clusters/volumes to csv and rasters.
     
     """
     def __init__(self, rundir, db_file="volumes.db"):
@@ -246,8 +125,6 @@ class VolumeDatabaseHandler:
         self.logger = setup_logger("db_handler", self.output_dir)
         self.conn = None
         self.cursor = None
-        
-
 
     def initialize_db(self):
         """
@@ -314,7 +191,6 @@ class VolumeDatabaseHandler:
         except Exception as e:
             self.logger.error(f"Error inserting volume data: {e}")
 
-
     def calculate_volume_features(self, area, mean_slope, mean_elevation):
         """
         Assign thickness:
@@ -362,8 +238,8 @@ class VolumeDatabaseHandler:
         Parameters:
             displacement_threshold (float): Threshold for calculation of probability. 
                 Must lie within the range of calculated probabilities.
-            lookup_table (str): filename of the lookuptable. Has to be located in the triangulation output dir.
-            name (str): Column name of the assigned variable in the volume writers dataframe. 
+            table_filename (str): filename of the lookuptable. Has to be located in the triangulation output dir.
+            column_name (str): Column name of the assigned variable.
         """
         # Load lookuptable
         lookup_table_path = os.path.join(self.triangulation_dir, table_filename)
@@ -397,14 +273,13 @@ class VolumeDatabaseHandler:
         else:
             self.logger.error("Unable to update table: Illegal column name {column_name}.")
         
-    
     def write_volumes_to_csv(self, max_rasters=100):
         #self.df.drop(columns=["released"]).to_csv(os.path.join(self.output_dir, "volumes.csv"),
         #                                          float_format="%.6e")
         csv_filename = os.path.join(self.output_dir, "volumes.csv")
         
         # Create a generator to fetch rows from the database
-        row_generator = self.fetch_volumes_ordered()
+        row_generator = self.fetch_volumes(max_rows=max_rasters, only_clusters=True, ordered=True)
         
         # Get the first row to determine the header (fieldnames)
         first_row = next(row_generator)
@@ -421,7 +296,7 @@ class VolumeDatabaseHandler:
             writer.writeheader()
             
             # Write the first row
-            LONLO, LONHI, LATLO, LATHI = Bingclaw_gridsize(first_row, upstream_dict, self.lon_tri, self.lat_tri, self.tri_mask)
+            LONLO, LONHI, LATLO, LATHI = self.landslide_grid_extent(first_row, upstream_dict, self.lon_tri, self.lat_tri, self.tri_mask)
             first_row.update({'LONLO': LONLO, 'LONHI': LONHI, 'LATLO': LATLO, 'LATHI': LATHI})
             #first_row.pop("released", None)
             # Alternatively the list can be convert to a string
@@ -431,7 +306,7 @@ class VolumeDatabaseHandler:
                 
                 # The calculations are not very fast, so avoid doing this for all volumes.
                 if i < max_rasters: 
-                    LONLO, LONHI, LATLO, LATHI = Bingclaw_gridsize(row, upstream_dict, self.lon_tri, self.lat_tri, self.tri_mask)
+                    LONLO, LONHI, LATLO, LATHI = self.landslide_grid_extent(row, upstream_dict, self.lon_tri, self.lat_tri, self.tri_mask)
                     row.update({'LONLO': LONLO, 'LONHI': LONHI, 'LATLO': LATLO, 'LATHI': LATHI})
                 # Including a list in a csv can be a bit messy, so a simple solutions is to just remove it
                 #row.pop("released", None)
@@ -440,88 +315,162 @@ class VolumeDatabaseHandler:
                 writer.writerow(row)
                 
         return csv_filename
-                
 
+    def fetch_volumes(self, max_rows=None, only_clusters=False, ordered=True):
+        """ Return python generator with volumes from database.
+        """ 
+        query = "SELECT * FROM volumes"
+        params = []
 
-    def fetch_volumes_ordered(self):
-        """ Generator to fetch volumes ordered by tsunami_potential_ratio.
-        """
-        #self.cursor.execute("""
-        #    SELECT * FROM volumes
-        #    ORDER BY tsunami_potential_ratio DESC
-        #""")
+        if only_clusters:
+            query += " WHERE is_representative = 1"
+
+        if ordered:
+            query += " ORDER BY no2d DESC"
+
+        if max_rows is not None:
+            query += " LIMIT ?"
+            params.append(max_rows)
         
-        # Should be quite similar to sort these two, but the latter seems more correct as it just uses the elevation.
-        self.cursor.execute("""
-            SELECT * FROM volumes
-            ORDER BY no2d DESC
-        """)
+        self.cursor.execute(query, params)
         for row in self.cursor:
             row_dict = dict(row)
             row_dict["released"] = json.loads(row_dict["released"])
             yield row_dict
-    
     
     def write_volumes_to_rasters(self, tsunami_potential_ratio_threshold=1., max_rasters=100, raster_driver="GTiff", crop=True):
         """Write rasters of volumes, optionally cropped to extent of each volume (non-zero region)."""
         rasterdir = os.path.join(self.output_dir, "rasters")
         create_dir(rasterdir, logger=self.logger, clear=True)
 
-        print('reading triangles')
+        self.logger.info('reading triangles')
         with rasterio.open(self.tri_mask_path) as src:
             tri_mask = src.read(1)
             tri_profile = src.profile
 
-        tri_profile.update(dtype=rasterio.float32, count=1, driver=raster_driver)
+        #tri_profile.update(dtype=rasterio.float32, count=1, driver=raster_driver)
 
-        for i, volume in enumerate(self.fetch_volumes_ordered()):
-            print('Writing volume ID'+str(volume['id']))
-            
-            write_raster(volume, tri_mask, tri_profile, self.output_dir, raster_driver=raster_driver, crop=True)
-            #write_raster(volume, tri_mask, tri_profile, self.output_dir, raster_driver="GTiff", crop=True)
-            #volume_mask = np.isin(tri_mask, volume["released"])
-            #volume_raster = convolve2d(volume_mask.astype(float) * volume["thickness"], np.ones((3, 3)) / 9., mode="same")
-            #print(i, max_rasters)
-            #if crop:
-            #    nonzero = np.nonzero(volume_raster)
-            #    if nonzero[0].size == 0 or nonzero[1].size == 0:
-            #        continue  # Skip empty volumes
-
-            #    row_min, row_max = nonzero[0].min(), nonzero[0].max()
-            #    col_min, col_max = nonzero[1].min(), nonzero[1].max()
-
-            #    pad = 10
-            #    row_min = max(row_min - pad, 0)
-            #    row_max = min(row_max + pad, volume_raster.shape[0])
-            #    col_min = max(col_min - pad, 0)
-            #    col_max = min(col_max + pad, volume_raster.shape[1])
-
-            #    cropped_raster = volume_raster[row_min:row_max, col_min:col_max]
-            #    cropped_transform = tri_profile["transform"] * rasterio.Affine.translation(col_min, row_min)
-
-            #    profile = tri_profile.copy()
-            #    profile.update({
-            #        "height": cropped_raster.shape[0],
-            #        "width": cropped_raster.shape[1],
-            #        "transform": cropped_transform
-            #    })
-            #else:
-            #    cropped_raster = volume_raster
-            #    profile = tri_profile
-
-            #volume_path = os.path.join(
-            #    self.output_dir,
-            #    f'rasters/volume_id-{volume["id"]}_seed-{volume["seed_triangle"]}_ratio-{volume["tsunami_potential_ratio"]:.2e}{SUFFIX_MAP[raster_driver]}'
-            #)
-
-            #with rasterio.open(volume_path, 'w', **profile) as dst:
-            #    dst.write(cropped_raster.astype(rasterio.float32), 1)
-            #self.logger.info(f"Wrote volume raster: {volume_path}")
-
+        for i, volume in enumerate(self.fetch_volumes(max_rows=max_rasters, only_clusters=True, ordered=True)):
+            self.write_raster(volume, tri_mask, tri_profile, rasterdir=rasterdir, raster_driver=raster_driver, crop=True)
             if i >= max_rasters or tsunami_potential_ratio_threshold > volume["tsunami_potential_ratio"]:
                 break
 
+    def write_raster(self, volume, tri_mask, tri_profile, rasterdir, raster_driver="AAIGrid", crop=True):
+        volume_mask = np.isin(tri_mask, json.loads(str(volume["released"])))
+        volume_raster = convolve2d(volume_mask.astype(float) * volume["thickness"], np.ones((3, 3)) / 9., mode="same")        
+        profile = tri_profile.copy()
+        
+        if crop:
+            nonzero = np.nonzero(volume_raster)
+            if nonzero[0].size != 0 or nonzero[1].size != 0:
+                row_min, row_max = nonzero[0].min(), nonzero[0].max()
+                col_min, col_max = nonzero[1].min(), nonzero[1].max()
 
+                pad = 10
+                row_min = max(row_min - pad, 0)
+                row_max = min(row_max + pad, volume_raster.shape[0])
+                col_min = max(col_min - pad, 0)
+                col_max = min(col_max + pad, volume_raster.shape[1])
+
+                volume_raster = volume_raster[row_min:row_max, col_min:col_max]
+                cropped_transform = tri_profile["transform"] * rasterio.Affine.translation(col_min, row_min)
+
+                profile.update({
+                    "height": volume_raster.shape[0],
+                    "width": volume_raster.shape[1],
+                    "transform": cropped_transform
+                })
+
+        lst = ast.literal_eval(volume["seed_triangles"])  # Converts to [1, 2, 3, 4]
+        st_str = '-'.join(map(str, lst))
+        volume_path = os.path.join(
+            rasterdir,
+            f'volume_id-{volume["id"]}_seed-{st_str}-{"crop"}{SUFFIX_MAP[raster_driver]}'
+        ) 
+        # Set nodata value
+        profile.update({
+        "driver": raster_driver,
+        "dtype": rasterio.float32,
+        "count": 1,
+        "nodata": -9999  # Set your NoData value here
+        })
+
+        #os.makedirs(os.path.dirname(volume_path), exist_ok=True)
+        with rasterio.open(volume_path, 'w', **profile) as dst:
+            dst.write(volume_raster.astype(rasterio.float32), 1)
+        self.logger.info(f"Wrote volume raster: {volume_path}")
+
+    def get_cluster_probability(self, cluster_id, probability_column="p_shake"):
+        """
+        Compute probability of the given clusters based on probability of volumes.
+        
+        parameters:
+            clusters (list): List of cluster IDs.
+            probability_column (str): Column name for the probability to use.
+        """
+        cluster_probabilities = {}
+        query = f""" SELECT * FROM volumes WHERE cluster = ?  """, (cluster_id,)
+        self.cursor.execute(query)
+        df_cluster = pd.read_sql_query(query, self.conn)
+        # TODO: Caclulate probability that 1 or more volumes in the cluster is released.
+        
+    def landslide_grid_extent(self, volume, upstream_dict, lon_tri, lat_tri, tri_mask):
+        """ 
+        Calculate bounding box for landslide simulations. 
+        Calculations are based on polygons made from upstream triangles. All polygons covering the 
+        the seed triangle is used to define the extent of the simulation grid.
+        """
+        
+        # Find all polygons in the upstream_dict that covers the seed triangle
+        matching_keys = []
+        for seed_triangle in ast.literal_eval(volume['seed_triangles']):
+            for k, v in upstream_dict.items():
+                if seed_triangle in v:
+                    matching_keys.append(k)
+        
+        # Merge all polygons into one
+        merged = np.concatenate([upstream_dict[k] for k in matching_keys])
+        # Find all unique triangles from the polygons
+        unique_merged = np.unique(merged)
+        # Get a mask og triangles
+        mask = np.isin(tri_mask, unique_merged)
+        # Get the coordinates of the triangles
+        temp_lon = lon_tri[mask]
+        temp_lat = lat_tri[mask]
+
+        # Compute corners
+        lat_min, lat_max = temp_lat.min(), temp_lat.max()
+        lon_min, lon_max = temp_lon.min(), temp_lon.max()
+
+        dx = lon_max - lon_min
+        dy = lat_max - lat_min
+
+        # Add some extra space outside the polygons 
+        # This could potentially be scaled based on the volume
+        # Where 0.1 is x*volume/reference volume
+        default_diff = 0.025
+        xextra = [default_diff, 0.05, 0.07, 0.09]
+        yextra = [default_diff, 0.05, 0.07, 0.09]
+
+        # This seems to work well for all test cases
+        xe = xextra[1]
+        ye = yextra[1]
+        # This hardcoded and suboptimal, but works for this excat case, but should
+        # be updated in the future
+        if lon_max > 15.6:
+            #xcoords = [lon_min - xe, lon_min - xe, lon_max, lon_max]
+            LONLO = lon_min - xe
+            LONHI = lon_max + default_diff
+        else:
+            #xcoords = [lon_min, lon_min, lon_max + xe, lon_max + xe]
+            LONLO = lon_min - default_diff
+            LONHI = lon_max + xe
+        #ycoords = [lat_min - ye, lat_max, lat_max, lat_min - ye]
+        LATHI = lat_max + default_diff
+        LATLO = lat_min - ye
+            
+        return LONLO, LONHI, LATLO, LATHI
+            
     def plot_distribution(self, seed_prob="p_fos_seed"):
         """Create figures to display the volume distribution.
         """
