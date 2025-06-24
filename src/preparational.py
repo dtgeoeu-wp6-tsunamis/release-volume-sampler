@@ -173,9 +173,11 @@ def sample_release_volumes(rundir):
         "fos_threshold": 1.6,
         "recursive_probability_threshold": 0.001,
         "seed_triangle_probability_threshold": 0.005,
-        "max_n_seed_triangles": 100,
-        "use_slopeunits": False,
-        "max_n_slopeunits": 5
+        "max_n_seed_triangles": 1000,
+        "use_slopeunits": True,
+        "max_n_slopeunits": 50,
+        "max_n_neighbours":2,
+        "max_workers":10
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)
