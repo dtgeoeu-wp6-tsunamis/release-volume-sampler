@@ -3,10 +3,6 @@ import numpy as np
 import shutil
 import rasterio
 import argparse
-import pandas as pd
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
-from scipy.spatial.distance import cdist
 import sys
 
 # Import from modules.
@@ -15,7 +11,9 @@ from rvsampler.slope_analysis import SlopeAnalysis
 from rvsampler.triangulate import Triangulate
 from rvsampler.cumprobs_by_triangle import caclulate_cumulative_probabilities
 from rvsampler.release_volume_sampler import RecursiveReleaseAnalysis
-from rvsampler.database_handler import VolumeDatabaseHandler, write_raster, Bingclaw_gridsize
+from rvsampler.database_handler import VolumeDatabaseHandler
+from rvsampler.cluster import ClusterAnalysis
+
 from rvsampler.utils import create_dir
 from rvsampler.set_logg import setup_logger
 
@@ -42,11 +40,12 @@ def main():
     #inputfolder = rundir + "input"
     config = {
         "rundir": rundir,
-        "singularity_image": os.path.join(rootdir,"images/grass.sif"),
-        "bathyfile": os.path.join(rootdir,'input', "bathy/localMessinaBathy.tif"),
+        "singularity_image": os.path.join(rootdir,"images", "grass.sif"),
+        "bathyfile": os.path.join(rootdir,'input', "bathy", "localMessinaBathy.tif"),
         "soilregions_filename": os.path.join(rootdir,'input', 'soilparams','regions.tif'),
         "soil_parameters_filename": os.path.join(rootdir,'input', 'soilparams','params.json'),
         "logger": logger,
+        "slopeunitfile": os.path.join(rootdir, 'input', 'slopeunits', 'slumap.tif'),
     }
     logger.info(f"Configuration: {config}")
     # Run steps if not already done.
@@ -66,58 +65,24 @@ def main():
         logger.info("Release volume sampling already done, skipping.")
     else:
         sample_release_volumes(rundir)
-        
-    sys.exit(0)
-    filter_config = {
-        "tsunami_potential_ratio_threshold": 1.,
-        "max_rasters": 10,
-        "raster_driver": 'GTiff', # GTiff/AAIGrid
-    }
-    
-
-    rundir = initialize(**config)    
-        
-    #execute_slope_analysis(rundir)
-    #triangulate_domain(rundir)
-    sample_release_volumes(rundir) 
-    
-
-    # Write the volumes to csv
-    with VolumeDatabaseHandler(rundir) as volumes_db:
-        # This is now written in a seperate file in operational.py
-        #volumes_db.load_probabilities_from_shakemap(displacement_threshold=5., 
-        #                                            table_filename="exceedance_displacement.npz", 
-        #                                            column_name = "p_shake")
-    
-        volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
-        volumes_db.write_volumes_to_rasters(**filter_config)
-        
-        #volumes_db.plot_distribution()
-        #volumes_db.plot_release_density_plots()
-        
-        #volumes_db.plot_distribution(seed_prob="p_shake")
-        #volumes_db.plot_release_density_plots(seed_prob="p_shake")
-      
-    sys.exit(0)
-    
-    # Cluster the volumes into n_clusters, use the csv for now, but might be faster to use the already
-    # opened db?
-    volumes_csv = os.path.join(resdir, 'volumes', "volumes.csv")
-    tri_tif = os.path.join(resdir, 'triangulation', "triangulation.tif")
-    bath_tif = os.path.join(rundir, 'input', 'bathy', 'messina_001', "bathy_truncated.tif")
-    upstream_dict_path = os.path.join(resdir, 'triangulation',"poly_slopes.npy")
-    print('Cluster_volumes')
-    cluster_volumes(volumes_csv, tri_tif, bath_tif, resdir, upstream_dict_path)
-    
+    if os.path.exists(os.path.join(rundir, "cluster_analysis", "cluster.log")):
+        logger.info("Clustering allready done, skipping.")
+    else:
+        cluster_release_volumes(rundir)
+    if os.path.exists(os.path.join(rundir, "volumes", "volumes.csv")):
+        logger.info("Release volumes already written to csv and rasters, skipping.")
+    else:
+        write_volumes(rundir)
    
-def initialize(rundir, bathyfile, soilregions_filename, soil_parameters_filename, singularity_image, logger):
+def initialize(rundir, bathyfile, soilregions_filename, soil_parameters_filename, singularity_image, logger, slopeunitfile=None):
     
     logfile = os.path.join(rundir, "preparational_external_software.txt")
     
     # Copy soilparameterfiles to rundir
     shutil.copy(soilregions_filename, os.path.join(rundir, "soilregions.tif"))
     shutil.copy(soil_parameters_filename, os.path.join(rundir, "soilparams.json"))
-    
+    if slopeunitfile is not None:
+        shutil.copy(slopeunitfile, os.path.join(rundir, "slumap.tif"))
 
     # Assert that the raster is in a geographic (lon-lat) coordinate system
     logger.info("Verifying that input bathymetri is logitude-latitude.")
@@ -164,14 +129,13 @@ def execute_slope_analysis(rundir):
     ky_thresholds = np.linspace(-3,1, num=50)
     sa.compute_cumulative(ky_thresholds, feature_name="logky", write=True)
 
-
 def triangulate_domain(rundir):
     config = {
         "rundir": rundir,
         "bathyfile": "bathy_truncated.tif",
         "utm_epsg_code": 32633, #Messina strait
         "resolution": (110, 110),
-        "slopeunitfile": os.path.join(rundir,'..','slopeunits',"slumap_clean_utm.tif"),
+        "slopeunitfile": os.path.join(rundir, "slumap.tif"),
     }
     optimization_params = {
         "num_iterations": 2000,
@@ -192,7 +156,6 @@ def triangulate_domain(rundir):
     outfile_name = "cumulative_fos.npz" # Writes to triangulation dir..
     caclulate_cumulative_probabilities(rundir, cumulative_dir, outfile_name)
 
-
 def sample_release_volumes(rundir):
     
     # Initialize the database.
@@ -211,7 +174,7 @@ def sample_release_volumes(rundir):
         "recursive_probability_threshold": 0.001,
         "seed_triangle_probability_threshold": 0.005,
         "max_n_seed_triangles": 100,
-        "use_slopeunits": True,
+        "use_slopeunits": False,
         "max_n_slopeunits": 5
     }
     # Execute analysis.
@@ -222,7 +185,57 @@ def sample_release_volumes(rundir):
     
     analysis.run(**run_config)
     
+def cluster_release_volumes(rundir):
+    
+    config = {
+        "rundir": rundir,
+        "n_clusters": 500,
+        "random_state": 0,
+        "batch_size": 1000,
+        "feature_columns": ['area', 'no2d', 'mean_elevation',
+                            'mean_northing', 'mean_easting'],
+        "columns_to_scale": ['area', 'no2d', 'mean_elevation',
+                             'mean_northing', 'mean_easting'],
+        "weights": {
+            'area': 1.0,
+            'no2d': 1.0,
+            'mean_elevation': 1.0,
+            'mean_northing': 1.0,
+            'mean_easting': 1.0
+        },
+    }
+    # Initialize ClusterAnalysis object
+    cluster_analysis = ClusterAnalysis(**config)    
+    # Fit the clustering model
+    cluster_analysis.fit()
+    # Write cluster label database
+    cluster_analysis.write_to_database()
+    # Find representatives and write to database
+    cluster_analysis.find_representatives()
+    # Close the database connection
+    cluster_analysis.close()
 
+def write_volumes(rundir):
+    """ Writes the release volumes to csv and rasters.
+    This is used for further analysis and visualization.
+    """
+    filter_config = {
+        "tsunami_potential_ratio_threshold": 1.,
+        "max_rasters": 100,
+        "raster_driver": 'GTiff', # GTiff/AAIGrid
+    }
+    
+    # Write the volumes to csv
+    with VolumeDatabaseHandler(rundir) as volumes_db:
+    
+        volumes_db.write_volumes_to_csv(max_rasters=filter_config['max_rasters'])
+        volumes_db.write_volumes_to_rasters(**filter_config)
+        
+        #volumes_db.plot_distribution()
+        #volumes_db.plot_release_density_plots()
+        
+        #volumes_db.plot_distribution(seed_prob="p_shake")
+        #volumes_db.plot_release_density_plots(seed_prob="p_shake")
 
 
 if __name__ == "__main__":

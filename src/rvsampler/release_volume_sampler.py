@@ -137,6 +137,13 @@ class RecursiveReleaseAnalysis:
         
         
         self.logger.info(f"Found {len(seed_triangles)} seed triangles.")
+        # Limit the number of seed triangles       
+        if len(seed_triangles) > max_n_seed_triangles:
+            self.logger.warning(
+                f"Number of seed triangles ({len(seed_triangles)}) exceeds max_n_seed_triangles ({max_n_seed_triangles}). "
+                "Limiting to max_n_seed_triangles."
+            )
+            seed_triangles = random.sample(seed_triangles, k=max_n_seed_triangles)    
         
         # Use slopeunits file for checking seed triangles that are dependent
         if use_slopeunits:
@@ -203,14 +210,6 @@ class RecursiveReleaseAnalysis:
             seed_triangles.extend([list(t) for t in st_pairs])
             seed_triangles = [[int(x) for x in sublist] for sublist in seed_triangles]
          
-         
-        # Limit the number of seed triangles       
-        if len(seed_triangles) > max_n_seed_triangles:
-            self.logger.warning(
-                f"Number of seed triangles ({len(seed_triangles)}) exceeds max_n_seed_triangles ({max_n_seed_triangles}). "
-                "Limiting to max_n_seed_triangles."
-            )
-            seed_triangles = random.sample(seed_triangles, k=max_n_seed_triangles)    
        
         with VolumeDatabaseHandler(self.rundir) as volumes_db:
             for seed_triangle in seed_triangles:        
@@ -233,7 +232,7 @@ class RecursiveReleaseAnalysis:
                 for volume in volumes:
                     volumes_db.insert_volume(volume_data=volume)
                     
-            self.logger.info(f"Finished single triangle initiation. Total: {len(seed_triangles)} seed triangles.")
+            self.logger.info(f"Finished triangle initiation. Total: {len(seed_triangles)} initial combinations.")
     
     def append_features_to_volumes(self, volumes, seed_triangles, p_fos_seed):
         """
