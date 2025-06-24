@@ -77,8 +77,8 @@ def main():
 
     rundir = initialize(**config)    
         
-    execute_slope_analysis(rundir)
-    triangulate_domain(rundir)
+    #execute_slope_analysis(rundir)
+    #triangulate_domain(rundir)
     sample_release_volumes(rundir) 
     
 

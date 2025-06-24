@@ -1,10 +1,17 @@
 import subprocess
 import os
+import argparse
 
+# Rundir tas inn som input
+parser = argparse.ArgumentParser(description="Release volume sampler")
+parser.add_argument('--IMAGE_PATH', required=True, help='Path to the singularity image')
+parser.add_argument('--bathy_file', required=True, help='Bathymetri')
+singularity_image = args.IMAGE_PATH
+bathy_file = args.bathy_file
 
 # Define the Singularity image path and the command to run inside the container
-singularity_image = "/mnt/c/Users/SFr/Work/VolumeSampler/images/grass.sif"  # Replace with your Singularity image file path
-command_load_bathy = ["grass grassdata/PERMANENT --exec r.in.gdal input=bathy_projected_truncated.tif output=bathy --overwrite"]
+#singularity_image = "/mnt/c/Users/SFr/Work/VolumeSampler/images/grass.sif"  # Replace with your Singularity image file path
+command_load_bathy = ["grass grassdata/PERMANENT --exec r.in.gdal input="+bathy_file[:-4]+"_projected.tif"+" output=bathy --overwrite"]
 
 command_calc_slopes = ["grass grassdata/PERMANENT --exec r.slope.aspect elevation=bathy slope=slope aspect=aspect format=degrees --overwrite"]
 command_save_slope1 = ["grass grassdata/PERMANENT --exec r.out.gdal input=slope output=slope.tif --overwrite"]
@@ -56,7 +63,5 @@ for thresh in range(500000,5000000,500000):
                 print(mdir + ' Finished')
 
 
-
-print('Hei!')
 #subprocess.run('grass grassdata/PERMANENT --exec r.in.gdal input=bathy_projected_truncated.tif output=bathy --overwrite')
 #subprocess.run('bash -c grass'+' '+r'/mnt/c/Users/SFr/Work/VolumeSampler/slopeunits/grassdata/PERMANENT')
