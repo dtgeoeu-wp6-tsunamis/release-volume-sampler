@@ -174,8 +174,9 @@ def sample_release_volumes(rundir):
         "recursive_probability_threshold": 0.001,
         "seed_triangle_probability_threshold": 0.005,
         "max_n_seed_triangles": 100,
-        "use_slopeunits": False,
-        "max_n_slopeunits": 5
+        "use_slopeunits": True,
+        "max_n_slopeunits": 10,
+        "max_n_simultaneous": 3,
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)
@@ -184,6 +185,11 @@ def sample_release_volumes(rundir):
     #poly_slopes(rundir, analysis)
     
     analysis.run(**run_config)
+    
+    # Verify that no volumes contain duplicate triangles.
+    with VolumeDatabaseHandler(rundir) as db:
+        assert db.test_no_duplicate_triangles_in_released()
+    
     
 def cluster_release_volumes(rundir):
     

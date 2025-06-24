@@ -120,7 +120,7 @@ class RecursiveReleaseAnalysis:
     def get_cumulative_logfos(self, triangle, threshold):
         return np.interp(threshold, xp = self.cumprob_thresholds, fp = self.cumprob_logfos[triangle,:], left=0., right=1.)
     
-    def get_initial_states(self, seed_triangles, max_n_slopeunits, use_slopeunits, max_n_neighbours):
+    def get_initial_states(self, seed_triangles, max_n_slopeunits, use_slopeunits, max_n_simultaneous):
         # Use slopeunits file for checking seed triangles that are dependent
         if use_slopeunits:
             # Read slopeunit file
@@ -131,8 +131,7 @@ class RecursiveReleaseAnalysis:
             for tri, su in zip(seed_triangles, self.triangulation.slopeunits[seed_triangles]):
                 grouped[su].append(tri)
               
-            """   This code can be used to asses how many seed triangles that can happen simultaneously, to many will lead to
-            an insande amount of combinations
+            """   This code can be used to asses number of initial states for a given combination of slopeunits and max_n_simultaneous.
             MAX_R = 4
             def count_limited_combinations(n, max_r):
                 return sum(comb(n, r) for r in range(1, min(n, max_r)+1))
@@ -145,14 +144,12 @@ class RecursiveReleaseAnalysis:
             all_groups = list(grouped.values())
             random_subset = random.sample(all_groups, min(max_n_slopeunits, len(all_groups)))
             
-            # Step 2: For each group, generate combinations
-            MAX_R = max_n_neighbours  # max combination size (adjust as needed)
-
+            # Create all combinations of triangles within each slopeunit group
             all_combinations = []
             for vals in random_subset:
                 if len(vals) == 0:
                     continue
-                for r in range(1, min(MAX_R+1, len(vals)+1)):
+                for r in range(1, min(max_n_simultaneous+1, len(vals)+1)):
                     all_combinations.extend(itertools.combinations(vals, r))
                     
             initial_states = [list(map(int, combo)) for combo in all_combinations]
@@ -186,7 +183,7 @@ class RecursiveReleaseAnalysis:
         return initial_states
     
     
-    def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles, recursive_probability_threshold, use_slopeunits=True, max_n_slopeunits=5, max_n_neighbours=2):
+    def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles, recursive_probability_threshold, use_slopeunits=True, max_n_slopeunits=5, max_n_simultaneous=2):
         
         # Asssign class variables to Release. 
         Release.fos_threshold = fos_threshold             # To assign probability of released upstream triangles.
@@ -215,10 +212,9 @@ class RecursiveReleaseAnalysis:
             seed_triangles = random.sample(list(seed_triangles), k=max_n_seed_triangles)  
         
         # Get the initial states                
-        initial_states = self.get_initial_states(seed_triangles, max_n_slopeunits, use_slopeunits, max_n_neighbours)  
+        initial_states = self.get_initial_states(seed_triangles, max_n_slopeunits, use_slopeunits, max_n_simultaneous)  
 
         all_results = []
-
         with ProcessPoolExecutor() as executor:
             futures = [
                 executor.submit(process_seed_pair, seed_pair, self.triangulation, self, seed_probability)
@@ -233,7 +229,7 @@ class RecursiveReleaseAnalysis:
                 self.append_features_to_volumes(volumes, seed_pair, prob)
                 for volume in volumes:
                     volumes_db.insert_volume(volume_data=volume)
-
+        
         self.logger.info(f"Finished triangle initiation. Total: {len(seed_triangles)} initial combinations.")
 
 
@@ -288,12 +284,9 @@ def process_seed_pair(seed_pair, triangulation, sampler, seed_probability):
         probability=1.0,
         step=1
     )
-    
     release.write_release(volumes)
-    
     # Attach seed probability
     prob = float(math.prod(seed_probability[seed_pair]))
-    
     return volumes, seed_pair, prob
 
 class Release():
@@ -329,11 +322,13 @@ class Release():
         
         if self.probability > self.recursive_probability_threshold:
             # Find upstream triangles of the ones released at previous step and calculate probability of release.
-            upstream_triangles = set() # Define as set to ensure every triangle occurs only once..
-            for triangle, released_at_step in zip(self.released, self.released_at_step):
-                if released_at_step == self.step-1:
-                    # Triangle was released at previous step. Find upstream...
-                    upstream_triangles = upstream_triangles.union(set(self.triangulation.get_upstream_triangles(triangle)))
+            #upstream_triangles = set() # Define as set to ensure every triangle occurs only once..
+            upstream_triangles = set()
+            for triangle in [t for t, s in zip(self.released, self.released_at_step) if s == self.step-1]:
+                upstream_triangles.update(self.triangulation.get_upstream_triangles(triangle))
+            
+            # Remove triangles already contained in the release.
+            upstream_triangles -= set(self.released)
             
             if len(upstream_triangles) > 0:
                 upstream_triangles = np.array(list(upstream_triangles))

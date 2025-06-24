@@ -60,7 +60,7 @@ def main():
     
     filter_config = {
         "tsunami_potential_ratio_threshold": 1.,
-        "max_rasters": 10,
+        "max_rasters": 100,
         "raster_driver": 'AAIGrid',
     }
     
@@ -624,5 +624,22 @@ class VolumeDatabaseHandler:
         plt.savefig(os.path.join(self.output_dir, f"release_distribution-{seed_prob}.png")) 
         plt.close()
         
+    def test_no_duplicate_triangles_in_released(self):
+        """
+        Test that no volume in the database contains duplicate triangles in the 'released' field.
+        
+        Usage example:
+        
+        db_handler = VolumeDatabaseHandler(...)
+        assert test_no_duplicate_triangles_in_released(db_handler)
+        """
+        for volume in self.fetch_volumes():
+            released = volume["released"]
+            if len(released) != len(set(released)):
+                self.logger.warning(f"Duplicate triangles found in volume with id {volume.get('id', 'unknown')}: {released}")
+                return False
+        self.logger.info("All volumes have unique triangles in 'released'.")
+        return True
+
 if __name__ == "__main__":
     main()
