@@ -117,34 +117,7 @@ class RecursiveReleaseAnalysis:
     def get_cumulative_logfos(self, triangle, threshold):
         return np.interp(threshold, xp = self.cumprob_thresholds, fp = self.cumprob_logfos[triangle,:], left=0., right=1.)
     
-    def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles, recursive_probability_threshold, use_slopeunits=True, max_n_slopeunits=5):
-        
-        # Asssign class variables to Release. 
-        Release.fos_threshold = fos_threshold             # To assign probability of released upstream triangles.
-        Release.recursive_probability_threshold = recursive_probability_threshold # Recursive propagation truncated if probabiliy is below.
-        Release.logger = self.logger
-        
-        self.logger.info(f"Run volume sampler: \
-            seed_triangle_probability: {seed_triangle_probability_threshold}, \
-            fos_threshold: {fos_threshold} \
-            recursive_probability_threshold: {recursive_probability_threshold}")
-        
-        # Filtration of seed triangles: P(fos < fos_threshold) > threshold
-        all_triangles = np.arange(self.triangulation.n_triangles)
-        seed_probability = np.array([self.get_cumulative_logfos(triangle, np.log10(Release.fos_threshold)) for triangle in all_triangles])
-        seed_triangles = all_triangles[np.logical_and(seed_probability > seed_triangle_probability_threshold, seed_probability != 9999.0)]
-
-        
-        
-        self.logger.info(f"Found {len(seed_triangles)} seed triangles.")
-        # Limit the number of seed triangles       
-        if len(seed_triangles) > max_n_seed_triangles:
-            self.logger.warning(
-                f"Number of seed triangles ({len(seed_triangles)}) exceeds max_n_seed_triangles ({max_n_seed_triangles}). "
-                "Limiting to max_n_seed_triangles."
-            )
-            seed_triangles = random.sample(seed_triangles, k=max_n_seed_triangles)    
-        
+    def get_initial_states(self, seed_triangles, max_n_slopeunits, use_slopeunits, max_n_neighbours):
         # Use slopeunits file for checking seed triangles that are dependent
         if use_slopeunits:
             # Read slopeunit file
@@ -170,7 +143,7 @@ class RecursiveReleaseAnalysis:
             random_subset = random.sample(all_groups, min(max_n_slopeunits, len(all_groups)))
             
             # Step 2: For each group, generate combinations
-            MAX_R = 2  # max combination size (adjust as needed)
+            MAX_R = max_n_neighbours  # max combination size (adjust as needed)
 
             all_combinations = []
             for vals in random_subset:
@@ -179,10 +152,12 @@ class RecursiveReleaseAnalysis:
                 for r in range(1, min(MAX_R+1, len(vals)+1)):
                     all_combinations.extend(itertools.combinations(vals, r))
                     
-            seed_triangles = [list(map(int, combo)) for combo in all_combinations]
+            initial_states = [list(map(int, combo)) for combo in all_combinations]
 
         else:
-        
+            # Convert seed_triangles to a list
+            seed_triangles = np.array(list(seed_triangles))
+            
             # Also calculate seed triangle pairs
             st_pairs = set()
             
@@ -199,25 +174,54 @@ class RecursiveReleaseAnalysis:
                     if ss != other:  # remove self-pairs
                         pair = tuple(sorted((ss, other)))  # sort to handle (a,b) == (b,a)
                         st_pairs.add(pair)
-            
                         
-            
-            
-        # Convert seed_triangles to a list of lists
-        if not use_slopeunits:
-            seed_triangles = [[x] for x in seed_triangles]
+            initial_states = [[x] for x in seed_triangles]
             # add pairs
-            seed_triangles.extend([list(t) for t in st_pairs])
-            seed_triangles = [[int(x) for x in sublist] for sublist in seed_triangles]
-         
-       
+            initial_states.extend([list(t) for t in st_pairs])
+            initial_states = [[int(x) for x in sublist] for sublist in initial_states]
+            
+        return initial_states
+    
+    
+    def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles, recursive_probability_threshold, use_slopeunits=True, max_n_slopeunits=5, max_n_neighbours=2):
+        
+        # Asssign class variables to Release. 
+        Release.fos_threshold = fos_threshold             # To assign probability of released upstream triangles.
+        Release.recursive_probability_threshold = recursive_probability_threshold # Recursive propagation truncated if probabiliy is below.
+        Release.logger = self.logger
+        
+        self.logger.info(f"Run volume sampler: \
+            seed_triangle_probability: {seed_triangle_probability_threshold}, \
+            fos_threshold: {fos_threshold} \
+            recursive_probability_threshold: {recursive_probability_threshold}")
+        
+        # Filtration of seed triangles: P(fos < fos_threshold) > threshold
+        all_triangles = np.arange(self.triangulation.n_triangles)
+        seed_probability = np.array([self.get_cumulative_logfos(triangle, np.log10(Release.fos_threshold)) for triangle in all_triangles])
+        seed_triangles = all_triangles[np.logical_and(seed_probability > seed_triangle_probability_threshold, seed_probability != 9999.0)]
+
+        
+        
+        self.logger.info(f"Found {len(seed_triangles)} seed triangles.")
+        # Limit the number of seed triangles       
+        if len(seed_triangles) > max_n_seed_triangles:
+            self.logger.warning(
+                f"Number of seed triangles ({len(seed_triangles)}) exceeds max_n_seed_triangles ({max_n_seed_triangles}). "
+                "Limiting to max_n_seed_triangles."
+            )
+            seed_triangles = random.sample(list(seed_triangles), k=max_n_seed_triangles)  
+        
+        # Get the initial states                
+        initial_states = self.get_initial_states(seed_triangles, max_n_slopeunits, use_slopeunits, max_n_neighbours)  
+            
+            
         with VolumeDatabaseHandler(self.rundir) as volumes_db:
-            for seed_triangle in seed_triangles:        
+            for seed_pairs in initial_states:        
                 volumes = []
                 # Initiate recursion for the given seed.                       
                 release = Release(triangulation=self.triangulation, 
                                   sampler=self, 
-                                  released=seed_triangle, 
+                                  released=seed_pairs, 
                                   released_at_step = [0], 
                                   probability = 1., 
                                   step = 1)
@@ -226,7 +230,7 @@ class RecursiveReleaseAnalysis:
                 release.write_release(volumes)
                 
                 # Append features
-                self.append_features_to_volumes(volumes, seed_triangle, float(math.prod(seed_probability[seed_triangle])))
+                self.append_features_to_volumes(volumes, seed_pairs, float(math.prod(seed_probability[seed_pairs])))
                 
                 # Add volumes to database
                 for volume in volumes:
