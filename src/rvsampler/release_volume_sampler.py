@@ -183,7 +183,7 @@ class RecursiveReleaseAnalysis:
         return initial_states
     
     
-    def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles, recursive_probability_threshold, use_slopeunits=True, max_n_slopeunits=5, max_n_simultaneous=2):
+    def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles, recursive_probability_threshold, use_slopeunits=True, max_n_slopeunits=5, max_n_simultaneous=2, max_workers=4):
         
         # Asssign class variables to Release. 
         Release.fos_threshold = fos_threshold             # To assign probability of released upstream triangles.
@@ -214,8 +214,9 @@ class RecursiveReleaseAnalysis:
         # Get the initial states                
         initial_states = self.get_initial_states(seed_triangles, max_n_slopeunits, use_slopeunits, max_n_simultaneous)  
 
+        # Run volume generation in parallel
         all_results = []
-        with ProcessPoolExecutor() as executor:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(process_seed_pair, seed_pair, self.triangulation, self, seed_probability)
                 for seed_pair in initial_states
@@ -362,7 +363,7 @@ class Release():
                 "steps": self.released_at_step,
             }
             volumes.append(new_volume)
-            self.logger.info(f"Terminated release. Released: {self.released}, Probability: {self.probability}, Steps: {self.released_at_step}")
+            #self.logger.info(f"Terminated release. Released: {self.released}, Probability: {self.probability}, Steps: {self.released_at_step}")
         else:
             for children in self.children:
                 children.write_release(volumes)
