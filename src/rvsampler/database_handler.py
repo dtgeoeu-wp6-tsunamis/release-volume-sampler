@@ -21,12 +21,6 @@ SUFFIX_MAP = {
     "AAIGrid": ".asc",
 }
 
-COLUMN_NAMES = ['id', 'released', 'condprob',
-           'area', 'mean_elevation', 'mean_easting', 'mean_northing', 'mean_slope', 
-           'seed_triangles', 'p_fos_seed', 'volume', 
-           'thickness', 'tsunami_potential_ratio',
-           'no2d', 'slopeunit']
-
 # Schema for the "volumes" table
 VOLUMES_SCHEMA = {
     "id": "INTEGER PRIMARY KEY",
@@ -47,7 +41,10 @@ VOLUMES_SCHEMA = {
     "cluster": "INTEGER",
     "cluster_center_dist": "REAL",
     "is_representative": "BOOLEAN",
+    "p_shake": "REAL",  # Probability from shakemap
 }
+
+#COLUMN_NAMES = list(VOLUMES_SCHEMA.keys())
 
 def main():
     """ To ensure that module imports works, run the script as a module.

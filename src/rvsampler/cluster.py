@@ -81,7 +81,7 @@ class ClusterAnalysis:
     def __init__(self, rundir, n_clusters, random_state, batch_size, 
                  columns_to_scale, feature_columns, weights):
         self.rundir = rundir
-        self.output_dir = os.path.join(rundir, 'cluster_analysis')
+        self.output_dir = os.path.join(rundir, 'volumes', 'cluster_analysis')
         create_dir(self.output_dir)
         self.logger = setup_logger("cluster", self.output_dir)
         
