@@ -640,6 +640,59 @@ class VolumeDatabaseHandler:
                 return False
         self.logger.info("All volumes have unique triangles in 'released'.")
         return True
+    def insert_volumes_batch(self, volume_list):
+        """
+        Insert multiple volume records into the database.
+        Args:
+            volume_list (List[dict]): List of dictionaries each containing 'volume' and 'location' data.
+        """
+        try:
+            rows = []
+
+            for volume_data in volume_list:
+                try:
+                    volume, thickness, tsunami_potential_ratio, no2d = self.calculate_volume_features(
+                        volume_data["area"],
+                        volume_data["mean_slope"],
+                        volume_data["mean_elevation"]
+                    )
+
+                    row = (
+                        json.dumps(volume_data["released"]),
+                        volume_data["condprob"],
+                        volume_data["area"],
+                        volume_data["mean_elevation"],
+                        volume_data["mean_easting"],
+                        volume_data["mean_northing"],
+                        volume_data["mean_slope"],
+                        json.dumps(volume_data["seed_triangles"]),
+                        volume_data["p_fos_seed"],
+                        volume,
+                        thickness,
+                        tsunami_potential_ratio,
+                        no2d,
+                        volume_data["slopeunit"]
+                    )
+
+                    rows.append(row)
+                except KeyError as e:
+                    self.logger.error(f"Missing field in volume_data: {e} | data: {volume_data}")
+                except Exception as e:
+                    self.logger.error(f"Error preparing volume_data: {e} | data: {volume_data}")
+
+            if rows:
+                self.cursor.executemany("""
+                    INSERT INTO volumes (
+                        released, condprob, area, mean_elevation, mean_easting, mean_northing, mean_slope,
+                        seed_triangles, p_fos_seed, volume, thickness, tsunami_potential_ratio, no2d, slopeunit
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, rows)
+                self.conn.commit()
+
+        except Exception as e:
+            self.logger.error(f"Error during batch insert: {e}")
+
 
 if __name__ == "__main__":
     main()

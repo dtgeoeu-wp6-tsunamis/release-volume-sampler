@@ -17,6 +17,14 @@ import random
 import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor
 
+from tqdm import tqdm
+
+# debugging
+import warnings
+# Make warnings raise exceptions
+warnings.filterwarnings("error", category=RuntimeWarning)
+# Make numpy raise on divide-by-zero, overflows, etc.
+np.seterr(divide='raise', invalid='raise')
 
 def main():
     """ To ensure that module imports work, 
@@ -112,8 +120,14 @@ class RecursiveReleaseAnalysis:
         for triangle in triangles:
             neighbors_in_release = [t in released_volume for t in self.triangulation.neighbours[triangle]]
             delta = self.triangulation.sides[triangle][neighbors_in_release].sum() / self.triangulation.sides[triangle].sum()
-            probability_of_release = np.exp(np.log(self.get_cumulative_logfos(triangle, np.log10(fos_threshold) 
-                                        - np.log10(1-delta)))*(self.triangulation.areas[triangle]/self.A0))
+            if delta == 1:
+                probability_of_release = 0
+            else:
+                if self.get_cumulative_logfos(triangle, np.log10(fos_threshold) - np.log10(1-delta)) == 0:
+                    probability_of_release = 0
+                else:
+                    probability_of_release = np.exp(np.log(self.get_cumulative_logfos(triangle, np.log10(fos_threshold) 
+                                            - np.log10(1-delta)))*(self.triangulation.areas[triangle]/self.A0))
             probs.append(probability_of_release)
         return np.array(probs)
 
@@ -214,50 +228,52 @@ class RecursiveReleaseAnalysis:
         # Get the initial states                
         initial_states = self.get_initial_states(seed_triangles, max_n_slopeunits, use_slopeunits, max_n_simultaneous)  
 
+        
         # Run volume generation in parallel
-        all_results = []
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(process_seed_pair, seed_pair, self.triangulation, self, seed_probability)
-                for seed_pair in initial_states
-            ]
-
-            for future in concurrent.futures.as_completed(futures):
-                all_results.append(future.result())
-                
+    
         with VolumeDatabaseHandler(self.rundir) as volumes_db:
-            for volumes, seed_pair, prob in all_results:
-                self.append_features_to_volumes(volumes, seed_pair, prob)
-                for volume in volumes:
-                    volumes_db.insert_volume(volume_data=volume)
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(process_seed_pair, seed_pair, self.triangulation, self, seed_probability): seed_pair
+                    for seed_pair in initial_states
+                }
+
+                for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing"):
+                    try:
+                        volumes, seed_pair, prob = future.result()
+                        self.append_features_to_volumes(volumes, seed_pair, prob)
+                        volumes_db.insert_volumes_batch(volume_list=volumes)
+                    except Exception as e:
+                        self.logger.error(f"Processing failed for seed_pair {futures[future]}: {e}")
+
         
         self.logger.info(f"Finished triangle initiation. Total: {len(seed_triangles)} initial combinations.")
-
-
-            
-        #with VolumeDatabaseHandler(self.rundir) as volumes_db:
-        #    for seed_pairs in initial_states:        
-        #        volumes = []
-        #        # Initiate recursion for the given seed.                       
-        #        release = Release(triangulation=self.triangulation, 
-        #                          sampler=self, 
-        #                          released=seed_pairs, 
-        #                          released_at_step = [0], 
-        #                          probability = 1., 
-        #                          step = 1)
-        #        
-        #        # traverse the released volumes.
-        #        release.write_release(volumes)
-        #        
-        #        # Append features
-        #        self.append_features_to_volumes(volumes, seed_pairs, float(math.prod(seed_probability[seed_pairs])))
-        #        
-        #        # Add volumes to database
-        #        for volume in volumes:
-        #            volumes_db.insert_volume(volume_data=volume)
-        #            
-        #    self.logger.info(f"Finished triangle initiation. Total: {len(seed_triangles)} initial combinations.")
         
+
+        """  
+        with VolumeDatabaseHandler(self.rundir) as volumes_db:
+            for seed_pairs in initial_states:        
+                volumes = []
+                # Initiate recursion for the given seed.                       
+                release = Release(triangulation=self.triangulation, 
+                                  sampler=self, 
+                                  released=seed_pairs, 
+                                  released_at_step = [0], 
+                                  probability = 1., 
+                                  step = 1)
+                
+                # traverse the released volumes.
+                release.write_release(volumes)
+                
+                # Append features
+                self.append_features_to_volumes(volumes, seed_pairs, float(math.prod(seed_probability[seed_pairs])))
+                
+                # Add volumes to database
+                for volume in volumes:
+                    volumes_db.insert_volume(volume_data=volume)
+                    
+            self.logger.info(f"Finished triangle initiation. Total: {len(seed_triangles)} initial combinations.")
+        """
     
     def append_features_to_volumes(self, volumes, seed_triangles, p_fos_seed):
         """
