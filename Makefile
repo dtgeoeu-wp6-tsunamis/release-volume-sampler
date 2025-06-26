@@ -23,25 +23,25 @@ plots:
 	@echo " Plot cumulatives.."
 	@for folder in $(shell find $(RUNDIR) -type d -name "cumulative"); do \
 		echo "Plot content $$folder"; \
-		poetry run python -m src.plot "$$folder"; \
+		poetry run python src/plot.py "$$folder"; \
 	done
 	
 	@echo " Plot quantiles.."
 	@for folder in $(shell find $(RUNDIR) -type d -name "quantiles"); do \
 		echo "Plot content $$folder"; \
-		poetry run python -m src.plot "$$folder"; \
+		poetry run python src/plot.py "$$folder"; \
 	done
 	
 	@echo " Plot displacements.."
 	@for folder in $(shell find $(RUNDIR) -type d -name "displacements"); do \
 		echo "Plot content $$folder"; \
-		poetry run python -m src.plot "$$folder"; \
+		poetry run python src/plot.py "$$folder"; \
 	done
 
 	@echo " Plot shakemap.."
 	@for folder in $(shell find $(RUNDIR) -type d -name "shakemaps"); do \
 		echo "Plot content $$folder"; \
-		poetry run python -m src.plot "$$folder"; \
+		poetry run python src/plot.py "$$folder"; \
 	done
 
 clean-folder:

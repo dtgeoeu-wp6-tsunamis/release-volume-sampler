@@ -41,7 +41,7 @@ def main():
     config = {
         "rundir": rundir,
         "singularity_image": os.path.join(rootdir,"images", "grass.sif"),
-        "bathyfile": os.path.join(rootdir,'input', "bathy", "localMessinaBathy.tif"),
+        "bathyfile": os.path.join(rootdir,'input', "bathy", "messina_001/bathy_truncated.tif"),
         "soilregions_filename": os.path.join(rootdir,'input', 'soilparams','regions.tif'),
         "soil_parameters_filename": os.path.join(rootdir,'input', 'soilparams','params.json'),
         "logger": logger,
@@ -65,9 +65,6 @@ def main():
         logger.info("Release volume sampling already done, skipping.")
     else:
         sample_release_volumes(rundir)
-    if os.path.exists(os.path.join(rundir, "cluster_analysis", "cluster.log")):
-        logger.info("Clustering allready done, skipping.")
-    else:
         cluster_release_volumes(rundir)
     if os.path.exists(os.path.join(rundir, "volumes", "volumes.csv")):
         logger.info("Release volumes already written to csv and rasters, skipping.")
