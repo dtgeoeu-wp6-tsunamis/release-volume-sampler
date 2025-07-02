@@ -8,8 +8,11 @@ from rvsampler.utils import create_dir, write_tif, cumulative, write_content
 from rvsampler.set_logg import setup_logger
 
 class ShakemapsReader:
-    
-    def __init__(self, shakemaps_filename, source_parameters_filename, rundir, thresholds=None, weights=None, aggregate=False):
+    """
+    Class for loading, aggregation and interpolation of shakemaps.
+    """
+    def __init__(self, rundir, shakemaps_filename, source_parameters_filename=None, thresholds=None,
+                 weights=None, aggregate=False, samples=None):
         
         self.shakemaps_filename = shakemaps_filename
         self.source_parameters_filename = source_parameters_filename
@@ -22,26 +25,24 @@ class ShakemapsReader:
         self.weights = weights
         self.aggregate = False
         self.nr_of_maps = len(self.shakemaps[0]["Z_pga"])
-        
+        # samples only applied if aggregate is False
+        self.samples = samples if samples is not None else range(self.nr_of_maps) 
         
         if aggregate:
             self.aggregate = True
-            assert thresholds is not None, "Thresholds must be provided for cumulative shakemaps."
+            assert thresholds is not None, "Thresholds must be provided if aggregate is True."
             self.thresholds = thresholds
-            self.weights = weights
+            if self.weights is None:
+                self.logger.warning("Weights not provided. Assumess uniformly weighted samples.")
+                self.weights = np.ones(len(self.nr_of_maps))/len(self.nr_of_maps)
+            else: 
+                self.weights = weights
             self.compute_cumulative()
        
         self.logger.info(self.shakemaps[0].keys()) 
         self.logger.info(f"Number of lon-lat points in shakemaps: {len(self.shakemaps)}")
         self.logger.info(f"Number of shakemaps {self.nr_of_maps}")
-        # Use with old messina data, but not really neccessary 
-        #self.source_parameters = []
-        #with open(self.source_parameters_filename, newline='') as csvfile:
-        #    reader = csv.DictReader(csvfile)
-        #    for row in reader:
-        #        self.source_parameters.append(row)
-        if self.weights is None:
-            self.weights = np.ones(len(self.source_parameters))/len(self.nr_of_maps)
+        
     
     @staticmethod
     def logpga(point):
@@ -72,7 +73,7 @@ class ShakemapsReader:
                 write_tif(os.path.join(self.shakemaps_out_dir, filename), cumulative, profile, self.logger)
         else:
             shakemap_content = []
-            for i in range(self.nr_of_maps):
+            for i in self.samples:
                 logpga = self.interpolate_shakemap(
                                                 value="logpga", 
                                                 sample=i, 
@@ -84,6 +85,7 @@ class ShakemapsReader:
                 shakemap_content.append({
                     "file": filename,
                     "value": "logpga",
+                    "sample": i,
                     "scale": "log10",
                     "unit": "g"
                 })

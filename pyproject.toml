@@ -20,6 +20,7 @@ ipython = "^8.29.0"
 meshio = "^5.3.5"
 shapely = "^2.0.6"
 cartopy = "^0.24.1"
+tqdm = "^4.67.1"
 
 
 [tool.poetry.group.dev.dependencies]

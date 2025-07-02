@@ -637,6 +637,7 @@ class VolumeDatabaseHandler:
                 return False
         self.logger.info("All volumes have unique triangles in 'released'.")
         return True
+    
     def insert_volumes_batch(self, volume_list):
         """
         Insert multiple volume records into the database.

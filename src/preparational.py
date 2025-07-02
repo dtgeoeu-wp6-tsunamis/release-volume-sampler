@@ -130,9 +130,9 @@ def triangulate_domain(rundir):
     config = {
         "rundir": rundir,
         "bathyfile": "bathy_truncated.tif",
-        "utm_epsg_code": 32633, #Messina strait
-        "resolution": (110, 110),
-        "slopeunitfile": os.path.join(rundir, "slumap.tif"),
+        "utm_epsg_code": 32633,     # Messina strait
+        "resolution": (110, 110),   # Mesh of nodes in unfitted triangulation.
+        "slopeunitfile": os.path.join(rundir, "slumap.tif"), # Used for assigning slopeunit to triangles.
     }
     optimization_params = {
         "num_iterations": 2000,

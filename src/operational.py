@@ -11,6 +11,7 @@ from scipy.interpolate import interp1d
 from rvsampler.displacements import DisplacementProbabilityAggregator
 from rvsampler.shakemaps_reader import ShakemapsReader
 from rvsampler.utils import create_dir
+from rvsampler.set_logg import setup_logger
 from rvsampler.cumprobs_by_triangle import caclulate_cumulative_probabilities
 from rvsampler.database_handler import VolumeDatabaseHandler
 
@@ -30,9 +31,10 @@ def main():
     rundir = args.rundir
     rootdir = args.rootdir
     
+    logger = setup_logger("preparational", rundir)
     shakemaps_params = {
         #"shakemaps_filename": os.path.join(rundir, "input/shakemaps/messina_1908/predicted_data_NN_Messina_1908.json"),
-        "shakemaps_filename": os.path.join(rootdir, "input/shakemaps/PGA_data/H_Z_pda_data_G.json"),
+        "shakemaps_filename": os.path.join(rootdir, "input/shakemaps/PGA_data/H_Z_pda_data_log10_G.json"),
         "source_parameters_filename": os.path.join(rootdir, "input/shakemaps/messina_1908/source_parameters.csv")
     }
     displacements_exceedance_params = {
@@ -40,8 +42,12 @@ def main():
         "outfile_name": "exceedance_displacement.npz"
     }
     
-    aggregate_shakemaps(rundir, **shakemaps_params)
-    #calculate_displacement_probabilities(rundir)
+    if os.path.exists(os.path.join(rundir, "shakemaps")):
+        logger.info("Preprocessing of shakemaps already done, skipping.")
+    else:
+        preprocess_shakemaps(rundir, **shakemaps_params)
+    
+    calculate_displacement_probabilities(rundir)
     #caclulate_cumulative_probabilities(rundir, **displacements_exceedance_params)
     
     """
@@ -75,9 +81,9 @@ def load_probabilities(displacement_threshold=5., table_filename="exceedance_dis
     
     return probabilities
 
-def aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename, cumulative=False):
+def preprocess_shakemaps(rundir, shakemaps_filename, source_parameters_filename, cumulative=False):
     """ Method to read shakemap and: 
-    1. Compute cumulative probabilities if wanted.
+    1. Compute cumulative probabilities (cumulative=True).
     2. Interpolate over domain and write to rasters.
     """
     
@@ -86,7 +92,8 @@ def aggregate_shakemaps(rundir, shakemaps_filename, source_parameters_filename, 
         source_parameters_filename=source_parameters_filename,
         rundir=rundir,
         thresholds=np.linspace(-3,0,40), 
-        aggregate=False
+        aggregate=False,
+        samples=[0,3]
     )
     
     # Interpolate over computational region and write to files
@@ -106,7 +113,7 @@ def calculate_displacement_probabilities(rundir):
     """
     thresholds = np.arange(1, 10, step=1.) # Displacement thresholds in cm.
     dpa = DisplacementProbabilityAggregator(rundir, thresholds, magnitude=7)
-    dpa.compute_probabilities()
+    dpa.compute_probabilities_by_sample(nr_of_pga_thresholds=100)
     
      
     # Plot the distribtuions

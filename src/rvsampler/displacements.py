@@ -10,8 +10,8 @@ from rvsampler.set_logg import setup_logger
 
 def displacement(logky, logpga, M=None, logpgv=None, model="scalar"):
     """ Calculation of ground displacements
-    Implementation of the statistical model for ground displacements of natural slopes subject to earthquakes 
-    given in [1]. Note: The statistical model is develpped for subaerial conditions.
+    Implementation of the statistical model for ground displacements of natural slopes subject to 
+    earthquakes given in [1]. Note: The statistical model is develpped for subaerial conditions.
     
     Parameters:
         logky: float or ndarray 
@@ -31,7 +31,8 @@ def displacement(logky, logpga, M=None, logpgv=None, model="scalar"):
         Logarithm of estimated displacements and associated standard deviation. 
         Standard deviation of lognormal multiplicative noise (as a function of ky/pga).  
         
-    1. Rathje and Saygili, ‘Probabilistic Assessment of Earthquake-Induced Sliding Displacements of Natural Slopes’.
+    1. Rathje and Saygili, ‘Probabilistic Assessment of Earthquake-Induced Sliding Displacements of 
+    Natural Slopes’.
     """
     ky_pga_ratio = 10**(logky - logpga)
     logscale_factor = np.log10(np.exp(1))
@@ -57,15 +58,31 @@ class DisplacementProbabilityAggregator:
         
         self.ky_dir = os.path.join(rundir, "slope_analysis", "yield_acceleration", "cumulative")
         self.pga_dir = os.path.join(rundir, "shakemaps")
-        self.magnitude = magnitude # Used for calculation of displacement. Ideally be embedded as a distribution, but not very sensitive.
+        
+        # Used for calculation of displacement. Ideally be embedded as a distribution, but not very 
+        # sensitive.
+        self.magnitude = magnitude 
 
         self.output_dir = os.path.join(self.rundir, "displacements")
         create_dir(self.output_dir)
         self.logger = setup_logger("displacements", self.output_dir)
+        
+        # May be convenient to compute displacements.. 
+        #self.source_parameters = []
+        #if self.source_parameters_filename is not None:
+        #    self.logger.info(f"Load source parameter file: {self.source_parameters_filename}")
+        #    with open(self.source_parameters_filename, newline='') as csvfile:
+        #        reader = csv.DictReader(csvfile)
+        #        for row in reader:
+        #            self.source_parameters.append(row)
 
-    def compute_probabilities(self):
+    def compute_aggregated_probabilities(self):
+        """
+        Computation of exceedance probability P(displacement > delta) given the ditribution
+        of PGA values represented by the cumulative in the shakemaps dir.
+        """
         # Create output dir
-        self.logger.info("Calculating displacement probabilities.")
+        self.logger.info("Calculating displacement probabilities for aggregated shakemaps.")
         
         # Load and compute probability densities.
         self.logger.info(f"Loads cumulative probabilities: {self.ky_dir}")
@@ -75,7 +92,6 @@ class DisplacementProbabilityAggregator:
         ky_density = np.diff(cumulative_ky, axis=0)
         pga_density = np.diff(cumulative_pga, axis=0)
         
-
         # Compute displacement at grid centers
         ky_centers = 0.5*(ky_thresholds[1:] + ky_thresholds[:-1])
         pga_centers = 0.5*(pga_thresholds[1:] + pga_thresholds[:-1])
@@ -97,20 +113,75 @@ class DisplacementProbabilityAggregator:
             
             # Write to file
             filename = f"exceedance_prob_{i}.tif"
-            content.append({"file": filename, "threshold": delta, "value": "exceedance prob.", "unit":"", "scale":""})
+            content.append({"file": filename, "threshold": delta, "value": "exceedance prob.", 
+                            "unit":"", "scale":""})
             write_tif(os.path.join(self.output_dir, filename), probs, profile, self.logger)
         write_content(content, self.output_dir)
 
+    def compute_probabilities_by_sample(self, nr_of_pga_thresholds):
+        """
+        Estimation of conditional probabilities P(displacement > delta | PGA). This is done by 
+        calculting displacement on a grid of threshold values for yield acceleration (k_y) and PGA 
+        values. The marginal probability associated with each fixed pga value is calculated applying
+        the cumulative distribution of k_y. This is applied as a lookuptable by binning each pga 
+        values of a given shakemap.
+        
+        Parameters:
+            nr_of_pga_thresholds: Number of thresholds used for binning of pga values.
+            
+        Note: Uncertainty in displacement is currently not taken into account.
+        """
+        self.logger.info("Calculating displacement probabilities by sample.")
+
+        # Load and compute probability densities.
+        self.logger.info(f"Loads cumulative probabilities: {self.ky_dir}")
+        cumulative_ky, ky_thresholds, profile = self.load_cumulative(self.ky_dir)
+        self.logger.info(f"Load pga samples: {self.pga_dir}")
+        pga_rasters, pga_thresholds, profile, sample_numbers = self.load_samples(
+            self.pga_dir, 
+            nr_of_thresholds=nr_of_pga_thresholds
+        )
+        ky_density = np.diff(cumulative_ky, axis=0)
+        
+        # Compute displacement at grid centers
+        ky_centers = 0.5*(ky_thresholds[1:] + ky_thresholds[:-1])
+        pga_centers = 0.5*(pga_thresholds[1:] + pga_thresholds[:-1])
+        kys, pgas = np.meshgrid(ky_centers, pga_centers)
+        log_d, log_sigma = displacement(kys, pgas, self.magnitude) 
+
+        # Compute probabilities and write to files
+        for j, pga_raster in enumerate(pga_rasters):
+            sample_out_dir = os.path.join(self.output_dir,f"sample_{sample_numbers[j]}")
+            create_dir(sample_out_dir)
+            
+            content = []
+            for i, delta in enumerate(self.displacement_thresholds):
+                
+                d_is_bigger = log_d > np.log10(delta)
+                
+                probs_by_threshold = np.tensordot(ky_density, d_is_bigger, axes=[0,1]) 
+                # d_is_bigger.shape: (n_pga_bins, n_ky_bins)
+                # ky_density.shape: (n_ky_bins, y_res, x_res)
+                # probs_by_threshold.shape: (y_res, x_res, n_pga_bins)
+                indices = np.searchsorted(pga_thresholds, pga_raster, side="right") - 1
+                indices = np.clip(indices, 0, probs_by_threshold.shape[2] - 1)
+                probs_by_sample = np.take_along_axis(probs_by_threshold, indices[..., None], axis=2)[..., 0]
+                
+                # Write to file
+                filename = f"exceedance_prob_{i}.tif"
+                content.append({"file": filename, "threshold": delta, "sample": sample_numbers[j], 
+                                "value": "exceedance prob.", "unit":"", "scale":""})
+                write_tif(os.path.join(sample_out_dir, filename), probs_by_sample, profile, self.logger)
+            write_content(content, sample_out_dir)
 
     def load_cumulative(self, dir):
         # load json file
         with open(os.path.join(dir, "content.json"),'r') as f:
             content = json.load(f)
 
-        # Initialize lists to store raster data and no-data values
+        # Initialize lists to store raster data.
         rasters = []
         thresholds = []
-        #nodata_vals = []
 
         # Read all rasters and store the data
         for e in content:
@@ -120,4 +191,24 @@ class DisplacementProbabilityAggregator:
             rasters.append(raster_data)
         return(np.stack(rasters), np.array(thresholds), profile)
     
-    
+    def load_samples(self, dir, nr_of_thresholds=500):
+        # load json file
+        with open(os.path.join(dir, "content.json"), 'r') as f:
+            pga_content = json.load(f)
+        
+        # initialize list to store values
+        samples = []        
+        sample_numbers = []
+        
+        # Read all rasters
+        for e in pga_content:
+            raster_path = os.path.join(dir, e["file"])
+            sample_numbers.append(e["sample"])
+            raster_data, msk, profile = read_tif(raster_path, None)
+            samples.append(raster_data)
+        samples = np.stack(samples)
+        
+        # Create thresholds
+        thresholds = np.linspace(start=samples.min(), stop=samples.max(), num=nr_of_thresholds)
+        
+        return(samples, thresholds, profile, sample_numbers)
