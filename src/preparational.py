@@ -8,11 +8,11 @@ import sys
 # Import from modules.
 from rvsampler.preprocess import truncate_positive_values, slope, aspect
 from rvsampler.slope_analysis import SlopeAnalysis
-from rvsampler.triangulate import Triangulate
-from rvsampler.cumprobs_by_triangle import caclulate_cumulative_probabilities
+from rvsampler.triangulate import Triangulate, Triangulation
 from rvsampler.release_volume_sampler import RecursiveReleaseAnalysis
 from rvsampler.database_handler import VolumeDatabaseHandler
 from rvsampler.cluster import ClusterAnalysis
+from rvsampler.cumprobs_by_triangle import caclulate_cumulative_probabilities
 
 from rvsampler.utils import create_dir
 from rvsampler.set_logg import setup_logger
@@ -134,8 +134,15 @@ def triangulate_domain(rundir):
         "resolution": (110, 110),   # Mesh of nodes in unfitted triangulation.
         "slopeunitfile": os.path.join(rundir, "slumap.tif"), # Used for assigning slopeunit to triangles.
     }
+    #optimization_params = {
+    #    "num_iterations": 2000,
+    #    "batch_size": 3000,
+    #    "shape_weight": 5e1,
+    #    "area_weight": 5e-11,
+    #    "elevation_weight": 1e-2
+    #}
     optimization_params = {
-        "num_iterations": 2000,
+        "num_iterations": 200,
         "batch_size": 3000,
         "shape_weight": 5e1,
         "area_weight": 5e-11,
@@ -144,14 +151,18 @@ def triangulate_domain(rundir):
     triang = Triangulate(**config)
     triang.fit(**optimization_params)
     triang.plot_triangulation()
-    triang.assign_slopeunits()
-    triang.write_to_file()
-    triang.poly_slopes()
+    triang.write_to_file() # Includes assignment of slopeunits if given.
     
-    # Calculate cumulative probabilities lookup table by triangle
+    # Applied for assigning extent of grid for simulation of landslides.
+    triang = Triangulation(rundir)
+    triang.initialize_triangle_properties()
+    triang.poly_slopes(filename="poly_slopes.npy")
+    triang.slopeunits_to_triangles(filename="slopeunits_to_triangles.npy")
+    
+    # Assign fos cumulative probabilities lookuptable by triangle
     cumulative_dir = os.path.join(rundir, "slope_analysis", "fos", "cumulative")
     outfile_name = "cumulative_fos.npz" # Writes to triangulation dir..
-    caclulate_cumulative_probabilities(rundir, cumulative_dir, outfile_name)
+    triang.create_lookuptable(cumulative_dir, outfile_name)
 
 def sample_release_volumes(rundir):
     
@@ -162,26 +173,33 @@ def sample_release_volumes(rundir):
     config = {
         "rundir": rundir,
         "mesh_path": os.path.join(rundir, "triangulation", "triangulation.vtk"),
-        "cumprob_logfos_path": os.path.join(rundir, "triangulation", "cumulative_fos.npz"),
+        "cumprob_logfos_path": os.path.join(rundir, "slope_analysis", "fos", "cumulative",\
+            "cumulative_fos.npz"),
         "utm_epsg_code": 32633, # Messina strait
     }
     
+    #run_config = {
+    #    "fos_threshold": 1.6,
+    #    "recursive_probability_threshold": 0.001,
+    #    "seed_triangle_probability_threshold": 0.005,
+    #    "max_workers":10,
+    #    "max_n_seed_triangles": 10000,
+    #    "use_slopeunits": True,
+    #    "max_n_slopeunits": 10000,
+    #    "max_n_simultaneous": 2,
+    #}
     run_config = {
         "fos_threshold": 1.6,
         "recursive_probability_threshold": 0.001,
         "seed_triangle_probability_threshold": 0.005,
         "max_workers":10,
-        "max_n_seed_triangles": 10000,
+        "max_n_seed_triangles": 50,
         "use_slopeunits": True,
         "max_n_slopeunits": 10000,
         "max_n_simultaneous": 2,
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)
-    # make slope polygons and save to file for use in operational.py - this is used for evaluating possible 
-    # slide scenarios and can be used for making the computational grid for bingclaw
-    #poly_slopes(rundir, analysis)
-    
     analysis.run(**run_config)
     
     # Verify that no volumes contain duplicate triangles.

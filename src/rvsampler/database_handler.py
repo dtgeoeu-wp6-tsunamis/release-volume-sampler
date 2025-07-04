@@ -14,6 +14,7 @@ import ast
 
 from rvsampler.set_logg import setup_logger
 from rvsampler.utils import create_dir
+from rvsampler.triangulate import Triangulation
 
 # Map rasterio driver to file suffix.
 SUFFIX_MAP = {
@@ -44,6 +45,13 @@ VOLUMES_SCHEMA = {
     "p_shake": "REAL",  # Probability from shakemap
 }
 
+SEED_TRIANGLES_SCHEMA = {
+    "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+    "triangle_id": "INTEGER",
+    "slopeunit": "INTEGER",
+    "p_fos": "REAL",
+    "p_shake": "REAL"
+}
 #COLUMN_NAMES = list(VOLUMES_SCHEMA.keys())
 
 def main():
@@ -99,6 +107,8 @@ class VolumeDatabaseHandler:
         self.triangulation_dir = os.path.join(rundir, "triangulation")
         self.tri_mask_path = os.path.join(self.triangulation_dir, "triangulation.tif")
         self.upstream_dict_path = os.path.join(self.triangulation_dir,"poly_slopes.npy")
+        self.slopeunits_to_triangles = np.load(os.path.join(self.triangulation_dir,\
+            "slopeunits_to_triangles.npy"), allow_pickle=True).item()
         self.db_file = os.path.join(self.output_dir, db_file)
         
         # Create volumes dir if it does not exist
@@ -129,9 +139,16 @@ class VolumeDatabaseHandler:
         """
         
         try:
+            #Create volumes table
             columns = ", ".join(f"{name} {type_}" for name, type_ in VOLUMES_SCHEMA.items())
             create_table_sql = f"CREATE TABLE IF NOT EXISTS volumes ({columns});"
             self.cursor.execute(create_table_sql)
+            
+            # Create seed_triangles table
+            seed_columns = ", ".join(f"{name} {type_}" for name, type_ in SEED_TRIANGLES_SCHEMA.items())
+            create_seed_table_sql = f"CREATE TABLE IF NOT EXISTS seed_triangles ({seed_columns});"
+            self.cursor.execute(create_seed_table_sql)
+            
             self.conn.commit()
             self.logger.info("Database initialized or already exists.")
         except Exception as e:
@@ -188,6 +205,17 @@ class VolumeDatabaseHandler:
         except Exception as e:
             self.logger.error(f"Error inserting volume data: {e}")
 
+    def insert_seed_triangles(self, triangles, slopeunits, p_fos):
+        rows = [
+            (int(tri), int(su), float(ps))
+            for tri, su, ps in zip(triangles, slopeunits, p_fos)
+        ]
+        self.cursor.executemany(
+            "INSERT INTO seed_triangles (triangle_id, slopeunit, p_fos) VALUES (?, ?, ?)",
+            rows
+        )
+        self.conn.commit()
+    
     def calculate_volume_features(self, area, mean_slope, mean_elevation):
         """
         Assign thickness:
@@ -207,69 +235,193 @@ class VolumeDatabaseHandler:
         
         V_{min}=0.0957*slope^{-1.609}*H^{1.3807} 
         
-        where V_{min} is the minimum volume that can create a significant tsunami for a given water depth H (in m) and slope angle
-        (in degrees) and V_{min} in Mm^{3}. Based on equations of Watts et al. (2003). 
+        where V_{min} is the minimum volume that can create a significant tsunami for a given water 
+        depth H (in m) and slope angle (in degrees) and V_{min} in Mm^{3}. Based on equations of 
+        Watts et al. (2003). 
         
-        Note: This ratio goes to infinity as H goes to zero. Therefore, we truncate H at -1 m (a small negative value)
-        to avoid division by zero errors.
+        Note: This ratio goes to infinity as H goes to zero. Therefore, we truncate H at -1 m 
+        (a small negative value) to avoid division by zero errors.
         """
         volume = 0.0298*area**1.36
         thickness = volume/area
         
         if mean_elevation >= -1.0:
-            self.logger.warning(f"Mean elevation is non-negative: {mean_elevation}. Setting elevation to -1.")
+            self.logger.warning(f"Mean elevation is non-negative: {mean_elevation}. \
+                Setting elevation to -1.")
             mean_elevation = -1.  # Set to a small negative value to avoid division by zero.
         
         L = np.sqrt(area) # Asume A = L*L
         mean_slope_rad = mean_slope*np.pi/180
         
-        eta = 0.2139*thickness*(1-0.7458*np.sin(mean_slope_rad)+0.1704*(np.sin(mean_slope_rad))**2)*(L*np.sin(mean_slope_rad)/(0-mean_elevation))**(5/4)
+        eta = 0.2139*thickness*(1-0.7458*np.sin(mean_slope_rad)+0.1704*(np.sin(mean_slope_rad))**2)\
+            *(L*np.sin(mean_slope_rad)/(0-mean_elevation))**(5/4)
         tsunami_potential_ratio = volume/(0.0957*(mean_slope**-1.609)*((0-mean_elevation)**1.3807)*1e6)
         
         return(volume, thickness, tsunami_potential_ratio, eta)
-    
 
-    def load_probabilities_from_shakemap(self, displacement_threshold, table_filename, column_name = "p_shake"):
-        """Loads shakemap and assigns the probability that the displacement is larger than the displacement_threshold.
+    def assign_probabilities_to_seed_triangles(self, displacement_threshold, displacement_dir,\
+        table_filename="exceedance_displacement.npz", column_name="p_shake"):
+        """
+        Loads shakemap and computes the release probability of each seed triangle is computed based
+        on P(displacement > displacement_threshold) for each individual seed triangle.
         
         Parameters:
             displacement_threshold (float): Threshold for calculation of probability. 
                 Must lie within the range of calculated probabilities.
-            table_filename (str): filename of the lookuptable. Has to be located in the triangulation output dir.
+            displacement_dir: directory of the computed displacements.
+            table_filename (str): filename of the lookuptable.
+            column_name (str): Column name of the assigned variable.
+            
+        TODO: Probabilities of initial values is just an approximation.
+        """
+        # Add column if not present
+        if column_name not in SEED_TRIANGLES_SCHEMA.keys():
+            try:
+                self.cursor.execute(f"ALTER TABLE seed_triangles ADD COLUMN {column_name} REAL")
+                self.logger.info(f"Added '{column_name}' column to the seed_triangle table.")
+                self.conn.commit()
+            except Exception as e:
+                self.logger.warning(f"Could not add column '{column_name}': {e}")
+        
+        # Load lookuptable
+        lookup_table_path = os.path.join(displacement_dir, table_filename)
+        self.logger.info(f"Load exceedance probabilities: {lookup_table_path}.")
+        displacement_exceedance = np.load(lookup_table_path)
+        thresholds, exceedance_probs = displacement_exceedance["thresholds"], displacement_exceedance["probs"]
+
+        interpolator = interp1d(x=thresholds, y=exceedance_probs, fill_value=(1., 0.), bounds_error=True)
+        probabilities = interpolator(displacement_threshold)
+
+        # Fetch all triangle_ids from seed_triangles
+        self.cursor.execute("SELECT id, triangle_id FROM seed_triangles")
+        rows = self.cursor.fetchall()
+
+        updates = []
+        for row in rows:
+            seed_triangle_id = row["id"]
+            triangle_index = row["triangle_id"]
+            prob = float(probabilities[triangle_index])
+            updates.append((prob, seed_triangle_id))
+
+        
+        # Update p_shake for each seed triangle
+        self.cursor.executemany(
+            "UPDATE seed_triangles SET p_shake = ? WHERE id = ?",
+            updates
+        )
+        self.conn.commit()
+        self.logger.info("Assigned probabilities to all seed triangles.")
+    
+    def compute_release_probabilities(self, column_name="p_shake", batch_size=1000):
+        
+        """
+        Compute probabilities of the initial state of each volume based on the release probability
+        of each seed triangle in the initial state.
+        
+        If the volume is assigned to a slopeunit the sample space is all initial states within the 
+        given slopeunit. If the volume is not assigned to a slopeunit (i.e. slopeunit=-1) the 
+        volume is considered an independent trial (We assume no interaction between volumes).
+        
+        Processes the database in batches for efficiency.
+        
+        Parameters:
             column_name (str): Column name of the assigned variable.
         """
-        # Load lookuptable
-        lookup_table_path = os.path.join(self.triangulation_dir, table_filename)
-        self.logger.info(f"Load exceedance probabilities: {lookup_table_path}.")
-        diplacement_exceedance = np.load(lookup_table_path)
-        thresholds, exceedance_probs = diplacement_exceedance["thresholds"], diplacement_exceedance["probs"]
-        
-        interpolator = interp1d(x=thresholds, y=exceedance_probs, fill_value=(1.,0.), bounds_error=True)
-        
-        #self.df[name] = interpolator(displacement_threshold)[self.df.seed_triangle.to_numpy()]
-        probabilities = interpolator(displacement_threshold)
-        
-        self.cursor.execute(f"SELECT id, seed_triangle FROM volumes")
-        rows = self.cursor.fetchall()
-        
-        # Create updates [(prob, id)]
-        updates = [(float(probabilities[row[1]]), row[0]) for row in rows]
-
-        # Ensure that new 'probability' column does not overwrite standard columns and commit.
+        # Add column if not present
         if column_name not in VOLUMES_SCHEMA.keys():
-            
-            # Added try so that the code can be rerun when it has crashed without having to delete everything and
-            # start over.
             try:
                 self.cursor.execute(f"ALTER TABLE volumes ADD COLUMN {column_name} REAL")
-                self.logger.info("Added 'probability' column to the table.")
-                self.cursor.executemany(f"UPDATE volumes SET {column_name} = ? WHERE id = ?", updates)
+                self.logger.info(f"Added '{column_name}' column to the table.")
                 self.conn.commit()
-            except:
-                print('database error!!!! Probably overwrite!')
-        else:
-            self.logger.error("Unable to update table: Illegal column name {column_name}.")
+            except Exception as e:
+                self.logger.warning(f"Could not add column '{column_name}': {e}")
+
+        # Load all triangle probabilities from seed_triangles table into a dict
+        self.cursor.execute("SELECT triangle_id, p_shake FROM seed_triangles")
+        triangle_probs = {row["triangle_id"]: row[column_name] for row in self.cursor.fetchall()}
+        seed_triangles_in_su = self.load_slopeunits_to_seedtriangles()
+        # Assign release probabilities to volumes.
+        offset = 0
+        while True:
+            query = f"SELECT id, seed_triangles, slopeunit FROM volumes LIMIT {batch_size} OFFSET {offset}"
+            df = pd.read_sql_query(query, self.conn)
+            if df.empty:
+                break
+
+            # Vectorized probability calculation
+            df['prob'] = df.apply(
+                lambda row: self.get_release_probability(
+                    json.loads(row['seed_triangles']) if isinstance(row['seed_triangles'], str) else row['seed_triangles'],
+                    seed_triangles_in_su[row['slopeunit']],
+                    row['slopeunit'],
+                    triangle_probs
+                ),
+                axis=1
+            )
+            updates = list(zip(df['prob'], df['id']))
+
+            if updates:
+                self.cursor.executemany(
+                    f"UPDATE volumes SET {column_name} = ? WHERE id = ?", updates
+                )
+                self.conn.commit()
+
+            offset += batch_size
+
+        self.logger.info(f"Finished assigning '{column_name}' to all volumes.")
+    
+    def load_slopeunits_to_seedtriangles(self):
+        """
+        Build a dictionary mapping slopeunit -> list of seed triangle indices,
+        using the seed_triangles table in the database.
+        Returns:
+            dict: {slopeunit: [triangle_id, ...], ...}
+        """
+        self.cursor.execute("SELECT triangle_id, slopeunit FROM seed_triangles")
+        slopeunits_to_seedtriangles = {}
+        for row in self.cursor.fetchall():
+            su = row["slopeunit"]
+            tri = row["triangle_id"]
+            if su not in slopeunits_to_seedtriangles:
+                slopeunits_to_seedtriangles[su] = []
+            slopeunits_to_seedtriangles[su].append(tri)
+        return slopeunits_to_seedtriangles
+
+    def get_release_probability(self, seed_triangles, seed_triangles_in_su, slope_unit, probabilities):
+        """
+        Calculates the probability of the initial state defined by the seed triangles within the 
+        given slopeunit. If slopeunits are not defined (slope_unit = -1) the event is considered 
+        as independent (non exclusive).
+
+        Args:
+            seed_triangles (list[int]): Indices of seed triangles (released in the initial state).
+            slope_unit (int): Slope unit identifier.
+            seed_triangles_in_su (list[int]): All seed triangles (none released and released)
+                in the slopeunit.
+            probabilities (dict or np.ndarray): Mapping from triangle index to P(displacement > delta).
+                                                If ndarray, index is triangle index.
+
+        Returns:
+            float: Probability of the initial state.
         
+        """
+        if slope_unit == -1:
+            return float(np.prod([probabilities[tri] for tri in seed_triangles]))
+        else:
+            # Fetch all release triangles in the slopeunit
+            # Assume you have a method or mapping: self.slopeunit_to_triangles[slope_unit]
+            # which gives a list/array of triangle indices in the slopeunit.
+
+            # Prepare indicator vector: alpha[i] = 1 if triangle[i] is a seed triangle, else 0
+            seed_set = set(seed_triangles)
+            alpha = np.array([1 if tri in seed_set else 0 for tri in seed_triangles_in_su])
+
+            # Get probabilities for all triangles in the slopeunit
+            p = np.array([probabilities[tri] for tri in seed_triangles_in_su])
+            
+            # Compute probability: prod(p_i^alpha_i * (1-p_i)^(1-alpha_i))
+            return float(np.prod(p**alpha * (1 - p)**(1 - alpha)))
+
     def write_volumes_to_csv(self, max_rasters=100):
         #self.df.drop(columns=["released"]).to_csv(os.path.join(self.output_dir, "volumes.csv"),
         #                                          float_format="%.6e")
@@ -691,6 +843,20 @@ class VolumeDatabaseHandler:
         except Exception as e:
             self.logger.error(f"Error during batch insert: {e}")
 
+    def fetch_all_seed_triangles(self):
+        """
+        Fetch all unique seed triangles from the database.
+        Returns:
+            set: A set of all unique seed triangle indices.
+        """
+        seed_triangles_set = set()
+        query = "SELECT seed_triangles FROM volumes"
+        self.cursor.execute(query)
+        for row in self.cursor:
+            # Parse the JSON list of seed triangles
+            triangles = json.loads(row["seed_triangles"])
+            seed_triangles_set.update(triangles)
+        return seed_triangles_set
 
 if __name__ == "__main__":
     main()

@@ -4,7 +4,7 @@
 # Default input, for other paths provide input when running the commands:
 # make volumes rootdir=c:/ROOTDIR
 ROOTDIR ?= /home/ebr/projects/release-volume-sampler
-REGION ?= messina_003
+REGION ?= messina_001
 RUNDIR ?= $(ROOTDIR)/generated/$(REGION)# Defined path in preparational.py
 
 

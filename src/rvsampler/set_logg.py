@@ -25,7 +25,7 @@ def setup_logger(routine_name, log_folder):
     # Prevent duplication of handlers if logger is already configured
     if not logger.handlers:
         # Create a file handler
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.FileHandler(log_file, mode="a")
         file_handler.setLevel(logging.INFO)
         
         # Create a console (stream) handler

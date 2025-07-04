@@ -10,8 +10,10 @@ import matplotlib.cm as cm
 import os
 import meshio
 import json
+from scipy import ndimage
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from rvsampler.utils import create_dir
+from rvsampler.utils import create_dir, read_tif
 from rvsampler.set_logg import setup_logger
 from scipy.spatial import cKDTree
 
@@ -37,10 +39,7 @@ def main():
     triang = Triangulate(**config)
     triang.fit(**optimization_params)
     triang.plot_triangulation()
-    triang.assign_slopeunits()
     triang.write_to_file()
-    triang.poly_slopes()
-    
 
 
 class Triangulate:
@@ -85,7 +84,7 @@ class Triangulate:
         self.true_elevations = tf.cast(self.target_elevation_function(self.eval_points), tf.float32)
         
         self.slopeunitfile = slopeunitfile
-        
+        self.slopeunits=None # Set to -1 if no slopeunitfile is given.
 
         # Dump parameters to file
         with open(os.path.join(self.output_dir, "triangulation_params.json"), 'w') as f:
@@ -337,6 +336,39 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         """
         Write triangulation to files.
         """
+
+        # Write to raster:
+        row_indices, col_indices = np.meshgrid(np.arange(self.src.height), np.arange(self.src.width), indexing='ij')
+        lons, lats = rasterio.transform.xy(self.src.transform, row_indices, col_indices)
+        lons, lats = np.array(lons), np.array(lats)
+        eastings, northings = self.lonlat_to_meters(lons, lats)
+
+        # Find the triangle containing each point
+        simplexes = self.tri.find_simplex(np.vstack([eastings.flatten(), northings.flatten()]).T)  # Index of triangle containing each point
+        triangles_raster = simplexes.reshape((self.src.height, self.src.width))
+        rasterfile_out = os.path.join(self.output_dir, rasterfile)
+        self.logger.info(f"Writes triangulation to: {rasterfile_out}")
+        with rasterio.open(rasterfile_out,'w', **self.src.profile) as dst:
+            dst.write(triangles_raster, 1)
+        
+        # Assign slopeunits by counting and write to file.
+        if self.slopeunitfile:
+            self.logger.info("Assigns slopeunits to triangles.")
+            slopeunits_raster, _,_ = read_tif(self.slopeunitfile)
+            self.slopeunits = ndimage.labeled_comprehension(
+                            input=slopeunits_raster, 
+                            labels=triangles_raster, 
+                            index=np.arange(len(self.tri.simplices)),
+                            func=lambda x: np.bincount(x).argmax(), 
+                            out_dtype=int, 
+                            default=-1
+                        )
+        else:
+            # Set to -1 if no slopeunits are given.
+            self.logger.info("No slopeunits given. Slopeunits set to -1.")
+            self.slopeunits = -1*np.ones((self.tri.simplices))
+        
+        # Write mesh.
         transformer = Transformer.from_crs(f"EPSG:{self.UTM_epsg_code}" ,"EPSG:4326" , always_xy=True)
         eastings, northings = self.vertices[:,0].numpy(), self.vertices[:,1].numpy()
         lons, lats = transformer.transform(eastings, northings)
@@ -351,7 +383,7 @@ Area loss: {area_weight*area_loss.numpy():.10e}
                         "is_boundary": self.triang_point_is_boundary},
             cell_data={"is_interior": [self.triangle_is_interior().astype(int)],
                        "neighbours": [self.tri.neighbors],
-                       "slopeunits": [self.slopeunits],}
+                       "slopeunits": [self.slopeunits.astype(int)],}
         )
         vtkfile_out = os.path.join(self.output_dir, vtkfile)
         self.logger.info(f"Writes triangulation to: {vtkfile_out}")
@@ -360,93 +392,6 @@ Area loss: {area_weight*area_loss.numpy():.10e}
             # file_format="vtk",  # optional if first argument is a path; inferred from extension
         )
 
-        # Write to raster:
-        row_indices, col_indices = np.meshgrid(np.arange(self.src.height), np.arange(self.src.width), indexing='ij')
-        lons, lats = rasterio.transform.xy(self.src.transform, row_indices, col_indices)
-        lons, lats = np.array(lons), np.array(lats)
-        eastings, northings = self.lonlat_to_meters(lons, lats)
-
-        # Find the triangle containing each point
-        simplexes = self.tri.find_simplex(np.vstack([eastings.flatten(), northings.flatten()]).T)  # Index of triangle containing each point
-        rasterfile_out = os.path.join(self.output_dir, rasterfile)
-        self.logger.info(f"Writes triangulation to: {rasterfile_out}")
-        with rasterio.open(rasterfile_out,'w', **self.src.profile) as dst:
-            dst.write(simplexes.reshape((self.src.height, self.src.width)), 1)
-        
-    def assign_slopeunits(self, use_slopeunits=True):
-        if use_slopeunits:
-            # Open and read the file
-            with rasterio.open(self.slopeunitfile) as src:
-                data = src.read(1)  # Read the first band
-                #profile = src.profile  # Metadata
-                #bounds = src.bounds    # Spatial extent
-                crs = src.crs          # Coordinate reference system
-                #nodata = src.nodata
-                transform = src.transform
-            
-            # Calculate slopeunits grid# Create coordinate arrays using the transform
-            height, width = data.shape
-            x = np.arange(0, width) * transform.a + transform.c
-            y = np.arange(0, height) * transform.e + transform.f
-
-            # Convert y to match array orientation
-            xv, yv = np.meshgrid(x, y)
-            
-            
-            # Converter til lat/lon
-            transformer = Transformer.from_crs(f"EPSG:{self.UTM_epsg_code}" ,"EPSG:4326" , always_xy=True)
-            eastings, northings = self.vertices[:,0].numpy(), self.vertices[:,1].numpy()
-            lons, lats = transformer.transform(eastings, northings)
-            
-            # Converter til slopeunits grid, kan spare tid ved å sjekke først om disse er det samme!
-            transformer2 = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
-            easting2, northing2 = transformer2.transform(lons, lats)
-            points2 = np.vstack([easting2, northing2]).T
-            
-            # Flatten and stack the xv and yv coordinate grids
-            grid_points = np.vstack([xv.flatten(), yv.flatten()]).T
-                
-            # Build the KD-tree once
-            tree = cKDTree(grid_points)
-
-            self.slopeunits = np.empty(len(self.tri.simplices))
-            for i in range(len(self.tri.simplices)):
-                #print(i)
-                center = points2[self.tri.simplices][i, :].mean(axis=0)
-                dist, closest_index = tree.query(center)
-                self.slopeunits[i] = data.flatten().data[closest_index]
-        else:
-            self.slopeunits = -1*np.ones((self.tri.simplices))
-            
-
-    def poly_slopes(self):
-        # list of all triangles
-        utriangles = np.arange(len(self.tri.simplices))
-        tri = Triangulation(self.rundir)
-        upstream_dict = {}
-        while len(utriangles) > 0:
-            tlist = self.get_all_upstream(utriangles[0],-1,tri)
-            upstream_dict[utriangles[0]] = tlist
-            # remove those found from the list
-            for i in tlist:
-                utriangles = np.delete(utriangles, np.where(utriangles == i))
-        
-        np.save(os.path.join(self.output_dir, "poly_slopes.npy"), upstream_dict)
-      
-    def get_all_upstream(self, start, last, tri, collected=None):
-        # Calculate all upstream triangles for given start triangle
-        
-        if collected is None:
-            collected = []
-        if start is not None and start not in collected and start > -1:  # avoid duplicates or infinite loops
-            collected.append(start)
-            #print('#######' + str(start)+'##########' + str(last))
-            
-            upstream = tri.get_upstream_triangles(start)
-            for i in upstream:
-                collected = self.get_all_upstream(i, start, tri, collected)
-
-        return collected
 
 
 class Triangulation:
@@ -482,12 +427,17 @@ class Triangulation:
         self.slopeunits = self.mesh.cell_data["slopeunits"][0]
         self.logger.info(f"n_triangles: {self.n_triangles}")
         
+        self.logger.info("loading triangulation mask.")
+        with rasterio.open(os.path.join(self.output_dir, "triangulation.tif")) as src:
+            self.tri_mask = src.read(1)
+        
         self.logger.info("Calculate vertice locations (easting, northing) using projection EPSG:{self.utm_epsg_code}.")
         self.transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{self.utm_epsg_code}", always_xy=True)
         self.easting, self.northing = self.transformer.transform(
             self.mesh.points[:, 0], self.mesh.points[:, 1]
         )
         
+    def initialize_triangle_properties(self):
         # Calculate triangle properties
         self.logger.info("Calculate triangle properties: normals, sides, areas, slopes and side normals.")
         self.normals, self.sides, self.areas, self.slopes =  self.get_normals_sides_areas_slopes()
@@ -507,7 +457,8 @@ class Triangulation:
         
         cross_products = np.linalg.cross(p2 - p1, p3 - p1)
         areas = 0.5 * np.linalg.norm(cross_products, axis=1) 
-        normals = cross_products/cross_products[:, 2].reshape(-1, 1) # scale so that n3 = 1. (Easier to calculate gradient)
+        # scale so that n3 = 1. (Easier to calculate gradient)
+        normals = cross_products/cross_products[:, 2].reshape(-1, 1) 
         
         normal_lenghts = np.sqrt((normals**2).sum(axis=-1))
         slopes = np.rad2deg(np.arccos(1/normal_lenghts))
@@ -550,10 +501,113 @@ class Triangulation:
     def get_upstream_triangles(self, released_triangle):
         # Get upstream triangles relative to a given triangle.
         upstream_triangles = self.neighbours[released_triangle, self.grads[released_triangle, :] > 0]
-        released_is_downstream = self.grads[upstream_triangles][self.neighbours[upstream_triangles] == released_triangle] < 0
+        released_is_downstream = self.grads[upstream_triangles][self.neighbours[upstream_triangles] \
+            == released_triangle] < 0
         upstream_is_interior = self.is_interior[upstream_triangles]
         upstream_same_slopeunit = self.slopeunits[upstream_triangles] == self.slopeunits[released_triangle]
-        return upstream_triangles[released_is_downstream & upstream_is_interior & upstream_same_slopeunit].astype(int)
+        return upstream_triangles[released_is_downstream & upstream_is_interior &\
+            upstream_same_slopeunit].astype(int)
+
+    def get_triangles_from_slopeunits(self):
+        """
+        Returns dictionary of triangles by slopeunit.
+        """
+        triangles_from_slopeunits = {}
+        for slopeunit in set(self.slopeunits):
+            triangles_from_slopeunits[slopeunit] = self.triangles[self.slopeunits == slopeunit]
+        
+    def poly_slopes(self, filename=None):
+        # list of all triangles
+        utriangles = np.arange(len(self.triangles))
+        upstream_dict = {}
+        while len(utriangles) > 0:
+            tlist = self.get_all_upstream(utriangles[0],-1)
+            upstream_dict[utriangles[0]] = tlist
+            # remove those found from the list
+            for i in tlist:
+                utriangles = np.delete(utriangles, np.where(utriangles == i))
+        if filename:
+            file_path = os.path.join(self.output_dir, filename)
+            self.logger.info(f"Write file: {filename}")
+            np.save(file_path, upstream_dict)
+        return upstream_dict
+      
+    def get_all_upstream(self, start, last, collected=None):
+        # Calculate all upstream triangles for given start triangle
+        if collected is None:
+            collected = []
+        if start is not None and start not in collected and start > -1:  # avoid duplicates or infinite loops
+            collected.append(start)
+            #print('#######' + str(start)+'##########' + str(last))
+            upstream = self.get_upstream_triangles(start)
+            for i in upstream:
+                collected = self.get_all_upstream(i, start, collected)
+        return collected
+    
+    def slopeunits_to_triangles(self, filename=None):
+        """
+        Return dictionary with an array of triangles for each slopeunit.
+        """ 
+        triangles_from_slopeunits = {}
+        triangle_indices = np.arange(self.n_triangles)
+        for slopeunit in set(self.slopeunits):
+            triangles_from_slopeunits[slopeunit] = triangle_indices[self.slopeunits == slopeunit]
+        if filename:
+            file_path = os.path.join(self.output_dir, filename)
+            self.logger.info(f"Write file: {filename}")
+            np.save(file_path, triangles_from_slopeunits)
+        return(triangles_from_slopeunits)
+    
+    def create_lookuptable(self, cumulative_dir, outfile_name):
+        """ 
+        Creates lookup table of probabilities by triangle (and threshold).
+        Note: Better to vectorize than current parallel execution.
+        """
+        
+        #triangulation_dir = os.path.join(self.rundir, "triangulation")
+        outfile = os.path.join(self.rundir, cumulative_dir, outfile_name)
+        
+        self.logger.info(f"Loads exceedance probabilities from {cumulative_dir}")
+        with open(os.path.join(cumulative_dir, "content.json"),'r') as f:
+            content = json.load(f)
+
+        triangle_probs = np.empty((self.n_triangles, len(content)))
+        thresholds = np.empty(len(content))
+        
+        # Parallel execution
+        def process_raster(raster_index, e):
+            raster_path = os.path.join(cumulative_dir, e["file"])
+            self.logger.info(f"Process raster: {raster_path}")
+            raster_data, msk, profile = read_tif(raster_path, self.logger)
+            
+            #Prepare the output for a single raster
+            def nanmin_func(values):
+                return np.nanmin(values) if np.any(~np.isnan(values)) else np.nan
+
+            probs = ndimage.labeled_comprehension(
+                input=raster_data, 
+                labels=self.tri_mask, 
+                index=np.arange(self.n_triangles),
+                func=nanmin_func, 
+                out_dtype=float, 
+                default=np.nan
+            )
+            
+            return raster_index, e['threshold'], probs
+        
+        with ThreadPoolExecutor() as executor:
+            futures = {
+                executor.submit(process_raster, raster_index, e): raster_index for raster_index, \
+                    e in enumerate(content)
+            }
+
+            for future in as_completed(futures):
+                raster_index, threshold, probs = future.result()
+                thresholds[raster_index] = threshold
+                triangle_probs[:, raster_index] = probs
+                self.logger.info(f"Processing raster {raster_index} is complete.")
+
+        np.savez(outfile, thresholds=thresholds, probs=triangle_probs) 
 
 if __name__ == "__main__":
     main()

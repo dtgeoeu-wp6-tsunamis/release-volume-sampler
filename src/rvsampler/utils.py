@@ -9,7 +9,7 @@ import shutil
 
 def read_tif(fname, logger=None):
     "Read .tif data and profile using rasterio."
-    if logger: logger.info(f"Read file: {fname}")
+    if logger: logger.debug(f"Read file: {fname}")
     with rasterio.open(fname) as src:
         #data = np.ma.masked_equal(src.read(1), src.nodata)
         data = src.read(1)
@@ -19,7 +19,7 @@ def read_tif(fname, logger=None):
 
 def write_tif(fname, data, profile, logger=None):
     "Write .tif data and profile using rasterio."
-    if logger: logger.info(f"Write file: {fname}")
+    if logger: logger.debug(f"Write file: {fname}")
     with rasterio.open(fname, 'w', **profile) as dst:
         dst.write(data, 1)
 

@@ -91,6 +91,7 @@ class RecursiveReleaseAnalysis:
         self.utm_epsg_code = utm_epsg_code             # Projection used for calculation of areas and sides of triangles.
         self.cumprob_logfos_path = cumprob_logfos_path # Path to lookuptable for cumprob of logfos.
         self.triangulation = Triangulation(self.rundir)
+        self.triangulation.initialize_triangle_properties()
         
         self.logger.info(" Calculating triangle normals, sides and areas.") # Has to be executed in correct order.
         self.normals, self.sides, self.areas, self.slopes = self.triangulation.get_normals_sides_areas_slopes()
@@ -197,7 +198,9 @@ class RecursiveReleaseAnalysis:
         return initial_states
     
     
-    def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles, recursive_probability_threshold, use_slopeunits=True, max_n_slopeunits=5, max_n_simultaneous=2, max_workers=4):
+    def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles,
+        recursive_probability_threshold, use_slopeunits=True, max_n_slopeunits=5,
+        max_n_simultaneous=2, max_workers=4):
         
         # Asssign class variables to Release. 
         Release.fos_threshold = fos_threshold             # To assign probability of released upstream triangles.
@@ -215,7 +218,6 @@ class RecursiveReleaseAnalysis:
         seed_triangles = all_triangles[np.logical_and(seed_probability > seed_triangle_probability_threshold, seed_probability != 9999.0)]
 
         
-        
         self.logger.info(f"Found {len(seed_triangles)} seed triangles.")
         # Limit the number of seed triangles       
         if len(seed_triangles) > max_n_seed_triangles:
@@ -224,6 +226,12 @@ class RecursiveReleaseAnalysis:
                 "Limiting to max_n_seed_triangles."
             )
             seed_triangles = random.sample(list(seed_triangles), k=max_n_seed_triangles)  
+        
+        self.logger.info("Write seed triangles to database.")
+        with VolumeDatabaseHandler(self.rundir) as volumes_db:
+            volumes_db.insert_seed_triangles(seed_triangles, 
+                                             self.triangulation.slopeunits[seed_triangles],
+                                             seed_probability[seed_triangles])
         
         # Get the initial states                
         initial_states = self.get_initial_states(seed_triangles, max_n_slopeunits, use_slopeunits, max_n_simultaneous)  
@@ -234,17 +242,17 @@ class RecursiveReleaseAnalysis:
         with VolumeDatabaseHandler(self.rundir) as volumes_db:
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
-                    executor.submit(process_seed_pair, seed_pair, self.triangulation, self, seed_probability): seed_pair
-                    for seed_pair in initial_states
+                    executor.submit(process_initial_state, initial_state, self.triangulation, self, seed_probability): initial_state
+                    for initial_state in initial_states
                 }
 
                 for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing"):
                     try:
-                        volumes, seed_pair, prob = future.result()
-                        self.append_features_to_volumes(volumes, seed_pair, prob)
+                        volumes, initial_state, prob = future.result()
+                        self.append_features_to_volumes(volumes, initial_state, prob)
                         volumes_db.insert_volumes_batch(volume_list=volumes)
                     except Exception as e:
-                        self.logger.error(f"Processing failed for seed_pair {futures[future]}: {e}")
+                        self.logger.error(f"Processing failed for initial_state {futures[future]}: {e}")
 
         
         self.logger.info(f"Finished triangle initiation. Total: {len(seed_triangles)} initial combinations.")
@@ -252,12 +260,12 @@ class RecursiveReleaseAnalysis:
 
         """  
         with VolumeDatabaseHandler(self.rundir) as volumes_db:
-            for seed_pairs in initial_states:        
+            for initial_state in initial_states:        
                 volumes = []
                 # Initiate recursion for the given seed.                       
                 release = Release(triangulation=self.triangulation, 
                                   sampler=self, 
-                                  released=seed_pairs, 
+                                  released=initial_state, 
                                   released_at_step = [0], 
                                   probability = 1., 
                                   step = 1)
@@ -266,7 +274,7 @@ class RecursiveReleaseAnalysis:
                 release.write_release(volumes)
                 
                 # Append features
-                self.append_features_to_volumes(volumes, seed_pairs, float(math.prod(seed_probability[seed_pairs])))
+                self.append_features_to_volumes(volumes, initial_state, float(math.prod(seed_probability[initial_state])))
                 
                 # Add volumes to database
                 for volume in volumes:
@@ -287,24 +295,24 @@ class RecursiveReleaseAnalysis:
             volume["mean_slope"] = self.triangulation.slopes[volume["released"]].mean()
             volume["mean_easting"] = self.triangulation.easting[np.unique(self.triangulation.triangles[volume["released"]]).flatten()].mean()
             volume["mean_northing"] = self.triangulation.northing[np.unique(self.triangulation.triangles[volume["released"]]).flatten()].mean()
-            volume["slopeunit"] = self.triangulation.slopeunits[seed_triangles[0]]
+            volume["slopeunit"] = int(self.triangulation.slopeunits[seed_triangles[0]])
         return volumes
 
-def process_seed_pair(seed_pair, triangulation, sampler, seed_probability):
+def process_initial_state(initial_state, triangulation, sampler, seed_probability):
     volumes = []
 
     release = Release(
         triangulation=triangulation,
         sampler=sampler,
-        released=seed_pair,
+        released=initial_state,
         released_at_step=[0],
         probability=1.0,
         step=1
     )
     release.write_release(volumes)
     # Attach seed probability
-    prob = float(math.prod(seed_probability[seed_pair]))
-    return volumes, seed_pair, prob
+    prob = float(math.prod(seed_probability[initial_state]))
+    return volumes, initial_state, prob
 
 class Release():
     """
