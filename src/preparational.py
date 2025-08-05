@@ -45,7 +45,7 @@ def main():
         "soilregions_filename": os.path.join(rootdir,'input', 'soilparams','regions.tif'),
         "soil_parameters_filename": os.path.join(rootdir,'input', 'soilparams','params.json'),
         "logger": logger,
-        "slopeunitfile": os.path.join(rootdir, 'input', 'slopeunits', 'slumap.tif'),
+        "slopeunitfile": None, #os.path.join(rootdir, 'input', 'slopeunits', 'slumap.tif'),
     }
     logger.info(f"Configuration: {config}")
     # Run steps if not already done.
@@ -189,14 +189,19 @@ def sample_release_volumes(rundir):
     #    "max_n_simultaneous": 2,
     #}
     run_config = {
-        "fos_threshold": 1.6,
-        "recursive_probability_threshold": 0.001,
-        "seed_triangle_probability_threshold": 0.005,
+        "fos_threshold": 1.8,
+        "recursive_probability_threshold": 1.e-5,
+        "seed_triangle_probability_threshold": 0.2,
         "max_workers":10,
-        "max_n_seed_triangles": 50,
-        "use_slopeunits": True,
-        "max_n_slopeunits": 10000,
-        "max_n_simultaneous": 2,
+        "max_n_seed_triangles": 500,
+        
+        # Slopeunit parameters.
+        "use_slopeunits": False, 
+        "max_n_slopeunits": 10000, 
+        "max_n_simultaneous": 2,    # Number of simultaneous seed triangles when using slopeunits.
+        
+        # Distance threshold for sampling pairs of seed triangles when not applying slopeuints.
+        "pairs_distance_threshold": 1000,
     }
     # Execute analysis.
     analysis = RecursiveReleaseAnalysis(**config)
@@ -211,7 +216,7 @@ def cluster_release_volumes(rundir):
     
     config = {
         "rundir": rundir,
-        "n_clusters": 500,
+        "n_clusters": 100,
         "random_state": 0,
         "batch_size": 1000,
         "feature_columns": ['area', 'no2d', 'mean_elevation',
@@ -242,7 +247,7 @@ def write_volumes(rundir):
     This is used for further analysis and visualization.
     """
     filter_config = {
-        "tsunami_potential_ratio_threshold": 1.,
+        "tsunami_potential_ratio_threshold": 0.,
         "max_rasters": 100,
         "raster_driver": 'GTiff', # GTiff/AAIGrid
     }

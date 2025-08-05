@@ -135,7 +135,7 @@ class RecursiveReleaseAnalysis:
     def get_cumulative_logfos(self, triangle, threshold):
         return np.interp(threshold, xp = self.cumprob_thresholds, fp = self.cumprob_logfos[triangle,:], left=0., right=1.)
     
-    def get_initial_states(self, seed_triangles, max_n_slopeunits, use_slopeunits, max_n_simultaneous):
+    def get_initial_states(self, seed_triangles, max_n_slopeunits, use_slopeunits, max_n_simultaneous, pairs_distance_threshold):
         # Use slopeunits file for checking seed triangles that are dependent
         if use_slopeunits:
             # Read slopeunit file
@@ -182,9 +182,9 @@ class RecursiveReleaseAnalysis:
             for ist, ss in enumerate(seed_triangles):
                 distances = np.linalg.norm(points[self.triangulation.triangles[ss]].mean(axis=0) - points[self.triangulation.triangles[seed_triangles]].mean(axis=1), axis=1)
                 
-                within_1km_indices = np.where(distances <= 1000)[0]
+                within_distance_threshold = np.where(distances <= pairs_distance_threshold)[0]
                 
-                for i in seed_triangles[within_1km_indices]:
+                for i in seed_triangles[within_distance_threshold]:
                     other = i
                     if ss != other:  # remove self-pairs
                         pair = tuple(sorted((ss, other)))  # sort to handle (a,b) == (b,a)
@@ -200,7 +200,7 @@ class RecursiveReleaseAnalysis:
     
     def run(self, seed_triangle_probability_threshold, fos_threshold, max_n_seed_triangles,
         recursive_probability_threshold, use_slopeunits=True, max_n_slopeunits=5,
-        max_n_simultaneous=2, max_workers=4):
+        max_n_simultaneous=2, max_workers=4, pairs_distance_threshold=1000):
         
         # Asssign class variables to Release. 
         Release.fos_threshold = fos_threshold             # To assign probability of released upstream triangles.
@@ -234,7 +234,7 @@ class RecursiveReleaseAnalysis:
                                              seed_probability[seed_triangles])
         
         # Get the initial states                
-        initial_states = self.get_initial_states(seed_triangles, max_n_slopeunits, use_slopeunits, max_n_simultaneous)  
+        initial_states = self.get_initial_states(seed_triangles, max_n_slopeunits, use_slopeunits, max_n_simultaneous, pairs_distance_threshold)  
 
         
         # Run volume generation in parallel
@@ -247,15 +247,19 @@ class RecursiveReleaseAnalysis:
                 }
 
                 for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing"):
+                    volumes, initial_state, prob = future.result()
+                    self.append_features_to_volumes(volumes, initial_state, prob)
+                    volumes_db.insert_volumes_batch(volume_list=volumes)
+                    """
                     try:
                         volumes, initial_state, prob = future.result()
                         self.append_features_to_volumes(volumes, initial_state, prob)
                         volumes_db.insert_volumes_batch(volume_list=volumes)
                     except Exception as e:
                         self.logger.error(f"Processing failed for initial_state {futures[future]}: {e}")
-
+                    """
         
-        self.logger.info(f"Finished triangle initiation. Total: {len(seed_triangles)} initial combinations.")
+        self.logger.info(f"Finished triangle initiation. Total: {len(initial_states)} initial combinations.")
         
 
         """  

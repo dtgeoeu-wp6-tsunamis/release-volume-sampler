@@ -83,8 +83,11 @@ class Triangulate:
         self.eval_points  = tf.cast(all_eval_points[eval_point_is_boundary == 0], tf.float32) # remove boundary points
         self.true_elevations = tf.cast(self.target_elevation_function(self.eval_points), tf.float32)
         
-        self.slopeunitfile = slopeunitfile
-        self.slopeunits=None # Set to -1 if no slopeunitfile is given.
+        if os.path.exists(slopeunitfile):
+            self.slopeunitfile = slopeunitfile
+        else:
+            self.slopeunitfile = None
+        self.slopeunits=None
 
         # Dump parameters to file
         with open(os.path.join(self.output_dir, "triangulation_params.json"), 'w') as f:
@@ -366,7 +369,7 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         else:
             # Set to -1 if no slopeunits are given.
             self.logger.info("No slopeunits given. Slopeunits set to -1.")
-            self.slopeunits = -1*np.ones((self.tri.simplices))
+            self.slopeunits = -1*np.ones(len(self.tri.simplices))
         
         # Write mesh.
         transformer = Transformer.from_crs(f"EPSG:{self.UTM_epsg_code}" ,"EPSG:4326" , always_xy=True)
@@ -391,7 +394,6 @@ Area loss: {area_weight*area_loss.numpy():.10e}
             vtkfile_out,  # str, os.PathLike, or buffer/open file
             # file_format="vtk",  # optional if first argument is a path; inferred from extension
         )
-
 
 
 class Triangulation:
@@ -500,9 +502,18 @@ class Triangulation:
 
     def get_upstream_triangles(self, released_triangle):
         # Get upstream triangles relative to a given triangle.
-        upstream_triangles = self.neighbours[released_triangle, self.grads[released_triangle, :] > 0]
-        released_is_downstream = self.grads[upstream_triangles][self.neighbours[upstream_triangles] \
-            == released_triangle] < 0
+        upstream_triangles = self.neighbours[released_triangle, self.grads[released_triangle, :] >= 0]
+        # Remove invalid upstream triangles (-1 means no neighbor)
+        upstream_triangles = upstream_triangles[upstream_triangles != -1]
+        
+        released_is_downstream = self.grads[upstream_triangles][self.neighbours[upstream_triangles]  == released_triangle] < 0
+        if len(released_is_downstream) != len(upstream_triangles):
+            # TODO: released is downstream have reduced dimension in some cases. 
+            # This causes a dimension mismatch. Return empty array.
+            self.logger.warning(f"Dimension mismatch. Returns empty array.\n \
+                                released_is_downstream: {released_is_downstream}.\n\
+                                upstream_triangles: {upstream_triangles}.\n")
+            return np.array([], dtype=int)
         upstream_is_interior = self.is_interior[upstream_triangles]
         upstream_same_slopeunit = self.slopeunits[upstream_triangles] == self.slopeunits[released_triangle]
         return upstream_triangles[released_is_downstream & upstream_is_interior &\

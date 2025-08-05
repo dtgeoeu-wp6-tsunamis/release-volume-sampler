@@ -107,8 +107,8 @@ class VolumeDatabaseHandler:
         self.triangulation_dir = os.path.join(rundir, "triangulation")
         self.tri_mask_path = os.path.join(self.triangulation_dir, "triangulation.tif")
         self.upstream_dict_path = os.path.join(self.triangulation_dir,"poly_slopes.npy")
-        self.slopeunits_to_triangles = np.load(os.path.join(self.triangulation_dir,\
-            "slopeunits_to_triangles.npy"), allow_pickle=True).item()
+        #self.slopeunits_to_triangles = np.load(os.path.join(self.triangulation_dir,\
+        #    "slopeunits_to_triangles.npy"), allow_pickle=True).item()
         self.db_file = os.path.join(self.output_dir, db_file)
         
         # Create volumes dir if it does not exist
