@@ -65,6 +65,7 @@ def main():
         logger.info("Release volume sampling already done, skipping.")
     else:
         sample_release_volumes(rundir)
+        assign_volume_features(rundir)
         cluster_release_volumes(rundir)
     if os.path.exists(os.path.join(rundir, "volumes", "volumes.csv")):
         logger.info("Release volumes already written to csv and rasters, skipping.")
@@ -172,7 +173,7 @@ def sample_release_volumes(rundir):
     
     config = {
         "rundir": rundir,
-        "mesh_path": os.path.join(rundir, "triangulation", "triangulation.vtk"),
+        #"mesh_path": os.path.join(rundir, "triangulation", "triangulation.vtk"),
         "cumprob_logfos_path": os.path.join(rundir, "slope_analysis", "fos", "cumulative",\
             "cumulative_fos.npz"),
         "utm_epsg_code": 32633, # Messina strait
@@ -189,11 +190,11 @@ def sample_release_volumes(rundir):
     #    "max_n_simultaneous": 2,
     #}
     run_config = {
-        "fos_threshold": 1.8,
-        "recursive_probability_threshold": 1.e-5,
-        "seed_triangle_probability_threshold": 0.2,
+        "fos_threshold": 1.6,
+        "recursive_probability_threshold": 1.e-4,
+        "seed_triangle_probability_threshold": 0.05,
         "max_workers":10,
-        "max_n_seed_triangles": 500,
+        "max_n_seed_triangles": 2000,
         
         # Slopeunit parameters.
         "use_slopeunits": False, 
@@ -211,6 +212,14 @@ def sample_release_volumes(rundir):
     with VolumeDatabaseHandler(rundir) as db:
         assert db.test_no_duplicate_triangles_in_released()
     
+def assign_volume_features(rundir):
+    """
+    Assign volume features to the release volumes.
+    This includes volume, thickness, tsunami potential ratio and no2d.
+    """
+    # volume_factor: Factor to scale thickness of the release volumes.
+    with VolumeDatabaseHandler(rundir) as db:
+        db.assign_volume_features(volume_factor=2.0)
     
 def cluster_release_volumes(rundir):
     
@@ -227,8 +236,8 @@ def cluster_release_volumes(rundir):
             'area': 1.0,
             'no2d': 1.0,
             'mean_elevation': 1.0,
-            'mean_northing': 1.0,
-            'mean_easting': 1.0
+            'mean_northing': 10.0,
+            'mean_easting': 10.0
         },
     }
     # Initialize ClusterAnalysis object

@@ -61,6 +61,7 @@ class Triangulate:
         self.output_dir = os.path.join(rundir, "triangulation")
         create_dir(self.output_dir)
         self.logger = setup_logger("triangulate", self.output_dir)
+        self.logger.info(f"Initialize triangulation with bathyfile: {bathyfile}, UTM EPSG code: {utm_epsg_code}, resolution: {resolution}.")
         
         self.bathyfile = os.path.join(rundir, bathyfile)
         self.src = rasterio.open(self.bathyfile)
@@ -210,6 +211,10 @@ class Triangulate:
                 yield batch_indices
     
     def fit(self, num_iterations, batch_size, shape_weight, area_weight, elevation_weight):
+        
+        self.logger.info(f"Start optimization with {num_iterations} iterations and batch size {batch_size} \
+            and shape_weight {shape_loss}, area_weight: {area_weight}, elevation_weight: {elevation_weight}.")
+        
         # 4. Optimization Loop
         optimizer = tf.optimizers.Adam(learning_rate=1., beta_1=0.7)
         interior_mask =  tf.cast(1- self.triang_point_is_boundary, dtype=tf.float32)
@@ -334,6 +339,7 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         plt.savefig(os.path.join(self.output_dir, output_file), dpi=300, bbox_inches="tight")
         plt.close(fig)  # Close figure after saving to avoid display if running in a notebook
         self.logger.info(f"Plot saved to {output_file}")
+        return fig
 
     def write_to_file(self, vtkfile="triangulation.vtk", rasterfile='triangulation.tif'):
         """

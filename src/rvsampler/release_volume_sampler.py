@@ -33,7 +33,7 @@ def main():
     # Usage example
     config = {
         "rundir": "/home/ebr/projects/release-volume-sampler/generated/messina_001",
-        "mesh_path": "/home/ebr/projects/release-volume-sampler/generated/messina_001/triangulation/triangulation.vtk",
+        #"mesh_path": "/home/ebr/projects/release-volume-sampler/generated/messina_001/triangulation/triangulation.vtk",
         "cumprob_logfos_path": "/home/ebr/projects/release-volume-sampler/generated/messina_001/triangulation/cumulative_fos.npz",
         "utm_epsg_code": 32633, # Messina strait
     }
@@ -82,7 +82,7 @@ class RecursiveReleaseAnalysis:
     
     """
 
-    def __init__(self, rundir, mesh_path, cumprob_logfos_path, utm_epsg_code):
+    def __init__(self, rundir, cumprob_logfos_path, utm_epsg_code):
         self.rundir = rundir
         self.output_dir = os.path.join(rundir, "volumes")
         create_dir(self.output_dir)

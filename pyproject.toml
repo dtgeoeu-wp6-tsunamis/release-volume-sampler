@@ -25,6 +25,7 @@ tqdm = "^4.67.1"
 
 [tool.poetry.group.dev.dependencies]
 nbformat = "^5.10.4"
+notebook = "^7.4.5"
 
 [build-system]
 requires = ["poetry-core"]

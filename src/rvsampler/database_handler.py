@@ -176,15 +176,13 @@ class VolumeDatabaseHandler:
             volume_data (dict): A dictionary containing 'volume' and 'location'.
         """
         try:
-            volume, thickness, tsunami_potential_ratio, no2d = self.calculate_volume_features(volume_data["area"], 
-                                                                                        volume_data["mean_slope"],
-                                                                                        volume_data["mean_elevation"])
+            
             self.cursor.execute("""
                 INSERT INTO volumes (
                     released, condprob, area, mean_elevation, mean_easting, mean_northing, mean_slope,
-                    seed_triangles, p_fos_seed, volume, thickness, tsunami_potential_ratio, no2d, slopeunit
+                    seed_triangles, p_fos_seed, slopeunit
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 json.dumps(volume_data["released"]),  # Serialize list to JSON
                 volume_data["condprob"],
@@ -195,15 +193,53 @@ class VolumeDatabaseHandler:
                 volume_data["mean_slope"],
                 json.dumps(volume_data["seed_triangles"]),
                 volume_data["p_fos_seed"],
-                volume,
-                thickness,
-                tsunami_potential_ratio,
-                no2d,
                 volume_data["slopeunit"]
             ))
             self.conn.commit()
         except Exception as e:
             self.logger.error(f"Error inserting volume data: {e}")
+    
+    def insert_volumes_batch(self, volume_list):
+        """
+        Insert multiple volume records into the database.
+        Args:
+            volume_list (List[dict]): List of dictionaries each containing 'volume' and 'location' data.
+        """
+        try:
+            rows = []
+
+            for volume_data in volume_list:
+                try:
+                    row = (
+                        json.dumps(volume_data["released"]),
+                        volume_data["condprob"],
+                        volume_data["area"],
+                        volume_data["mean_elevation"],
+                        volume_data["mean_easting"],
+                        volume_data["mean_northing"],
+                        volume_data["mean_slope"],
+                        json.dumps(volume_data["seed_triangles"]),
+                        volume_data["p_fos_seed"],
+                        volume_data["slopeunit"]
+                    )
+                    rows.append(row)
+                except KeyError as e:
+                    self.logger.error(f"Missing field in volume_data: {e} | data: {volume_data}")
+                except Exception as e:
+                    self.logger.error(f"Error preparing volume_data: {e} | data: {volume_data}")
+
+            if rows:
+                self.cursor.executemany("""
+                    INSERT INTO volumes (
+                        released, condprob, area, mean_elevation, mean_easting, mean_northing, mean_slope,
+                        seed_triangles, p_fos_seed, slopeunit
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, rows)
+                self.conn.commit()
+
+        except Exception as e:
+            self.logger.error(f"Error during batch insert: {e}")
 
     def insert_seed_triangles(self, triangles, slopeunits, p_fos):
         rows = [
@@ -216,11 +252,15 @@ class VolumeDatabaseHandler:
         )
         self.conn.commit()
     
-    def calculate_volume_features(self, area, mean_slope, mean_elevation):
+    def assign_volume_features(self, volume_factor=1.0, batch_size=10000):
         """
+        Vectorized and chunked computation and update of volume features.
+        
         Assign thickness:
-        Statistical relation for assigning thickness of the volume (Zengafinnen-Morris et al. 2022).
-        V = 0.0298*A^{1.36}
+        Statistical relation for assigning thickness of the volume (Zengafinnen-Morris et al. 2022)
+        for volume_factor = 1.
+        
+        V = volume_factor*0.0298*A^{1.36}
         
         Estimate tsunami potential:
         Equation for maximum sea level depression.
@@ -242,22 +282,43 @@ class VolumeDatabaseHandler:
         Note: This ratio goes to infinity as H goes to zero. Therefore, we truncate H at -1 m 
         (a small negative value) to avoid division by zero errors.
         """
-        volume = 0.0298*area**1.36
-        thickness = volume/area
-        
-        if mean_elevation >= -1.0:
-            self.logger.warning(f"Mean elevation is non-negative: {mean_elevation}. \
-                Setting elevation to -1.")
-            mean_elevation = -1.  # Set to a small negative value to avoid division by zero.
-        
-        L = np.sqrt(area) # Asume A = L*L
-        mean_slope_rad = mean_slope*np.pi/180
-        
-        eta = 0.2139*thickness*(1-0.7458*np.sin(mean_slope_rad)+0.1704*(np.sin(mean_slope_rad))**2)\
-            *(L*np.sin(mean_slope_rad)/(0-mean_elevation))**(5/4)
-        tsunami_potential_ratio = volume/(0.0957*(mean_slope**-1.609)*((0-mean_elevation)**1.3807)*1e6)
-        
-        return(volume, thickness, tsunami_potential_ratio, eta)
+        offset = 0
+        while True:
+            query = "SELECT id, area, mean_slope, mean_elevation FROM volumes LIMIT ? OFFSET ?"
+            df = pd.read_sql_query(query, self.conn, params=(batch_size, offset))
+            if df.empty:
+                break
+
+            # Vectorized calculation
+            area = df['area']
+            mean_slope = df['mean_slope']
+            mean_elevation = df['mean_elevation']
+
+            volume = volume_factor * 0.0298 * area ** 1.36
+            thickness = volume / area
+
+            # Avoid division by zero for mean_elevation >= -1
+            mean_elevation_safe = mean_elevation.copy()
+            mean_elevation_safe[mean_elevation_safe >= -1.0] = -1.0
+
+            L = np.sqrt(area)
+            mean_slope_rad = np.deg2rad(mean_slope)
+            eta = 0.2139 * thickness * (1 - 0.7458 * np.sin(mean_slope_rad) + 0.1704 * (np.sin(mean_slope_rad)) ** 2) \
+                * (L * np.sin(mean_slope_rad) / (0 - mean_elevation_safe)) ** (5 / 4)
+            tsunami_potential_ratio = volume / (0.0957 * (mean_slope ** -1.609) * ((0 - mean_elevation_safe) ** 1.3807) * 1e6)
+
+            # Prepare updates
+            updates = list(zip(volume, thickness, tsunami_potential_ratio, eta, df['id']))
+
+            self.cursor.executemany("""
+                UPDATE volumes
+                SET volume = ?, thickness = ?, tsunami_potential_ratio = ?, no2d = ?
+                WHERE id = ?
+            """, updates)
+            self.conn.commit()
+            offset += batch_size
+
+        self.logger.info("Assigned volume, thickness, tsunami_potential_ratio and no2d to all volumes.")
 
     def assign_probabilities_to_seed_triangles(self, displacement_threshold, displacement_dir,\
         table_filename="exceedance_displacement.npz", column_name="p_shake"):
@@ -425,10 +486,14 @@ class VolumeDatabaseHandler:
     def write_volumes_to_csv(self, max_rasters=100):
         #self.df.drop(columns=["released"]).to_csv(os.path.join(self.output_dir, "volumes.csv"),
         #                                          float_format="%.6e")
-        csv_filename = os.path.join(self.output_dir, "volumes.csv")
+        csv_filename = os.path.join(self.output_dir, "volume_representatives.csv")
         
         # Create a generator to fetch rows from the database
-        row_generator = self.fetch_volumes(max_rows=max_rasters, only_clusters=True, ordered=True)
+        row_generator = self.fetch_volumes(max_rows=max_rasters, only_clusters=True, ordered=True, 
+                                           columns=["id", "released","area","mean_elevation","mean_slope",
+                                                    "seed_triangles", "volume", "thickness",
+                                                    "tsunami_potential_ratio","no2d","slopeunit","cluster",
+                                                    "cluster_center_dist"])
         
         # Get the first row to determine the header (fieldnames)
         first_row = next(row_generator)
@@ -465,10 +530,17 @@ class VolumeDatabaseHandler:
                 
         return csv_filename
 
-    def fetch_volumes(self, max_rows=None, only_clusters=False, ordered=True):
-        """ Return python generator with volumes from database.
-        """ 
-        query = "SELECT * FROM volumes"
+    def fetch_volumes(self, max_rows=None, only_clusters=False, ordered=True, columns=None):
+        """
+        Return python generator with volumes from database.
+        If columns is provided, only those columns are loaded.
+        """
+        if columns is not None:
+            select_clause = ", ".join(columns)
+        else:
+            select_clause = "*"
+
+        query = f"SELECT {select_clause} FROM volumes"
         params = []
 
         if only_clusters:
@@ -484,7 +556,9 @@ class VolumeDatabaseHandler:
         self.cursor.execute(query, params)
         for row in self.cursor:
             row_dict = dict(row)
-            row_dict["released"] = json.loads(row_dict["released"])
+            # Only decode 'released' if present
+            if "released" in row_dict:
+                row_dict["released"] = json.loads(row_dict["released"])
             yield row_dict
     
     def write_volumes_to_rasters(self, tsunami_potential_ratio_threshold=1., max_rasters=100, raster_driver="GTiff", crop=True):
@@ -619,6 +693,38 @@ class VolumeDatabaseHandler:
         LATLO = lat_min - ye
             
         return LONLO, LONHI, LATLO, LATHI
+    
+    def test_no_duplicate_triangles_in_released(self):
+        """
+        Test that no volume in the database contains duplicate triangles in the 'released' field.
+        
+        Usage example:
+        
+        db_handler = VolumeDatabaseHandler(...)
+        assert test_no_duplicate_triangles_in_released(db_handler)
+        """
+        for volume in self.fetch_volumes():
+            released = volume["released"]
+            if len(released) != len(set(released)):
+                self.logger.warning(f"Duplicate triangles found in volume with id {volume.get('id', 'unknown')}: {released}")
+                return False
+        self.logger.info("All volumes have unique triangles in 'released'.")
+        return True
+    
+    def fetch_all_seed_triangles(self):
+        """
+        Fetch all unique seed triangles from the database.
+        Returns:
+            set: A set of all unique seed triangle indices.
+        """
+        seed_triangles_set = set()
+        query = "SELECT seed_triangles FROM volumes"
+        self.cursor.execute(query)
+        for row in self.cursor:
+            # Parse the JSON list of seed triangles
+            triangles = json.loads(row["seed_triangles"])
+            seed_triangles_set.update(triangles)
+        return seed_triangles_set
             
     def plot_distribution(self, seed_prob="p_fos_seed"):
         """Create figures to display the volume distribution.
@@ -681,7 +787,7 @@ class VolumeDatabaseHandler:
 
         plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave space for the main title
         plt.savefig(os.path.join(self.output_dir, f"release_characteristics-{seed_prob}.png"))
-
+        return fig
 
     def plot_release_density_plots(self, seed_prob="p_fos_seed"):
         """ Create figure to display the location of the sampled release volumes.
@@ -771,92 +877,7 @@ class VolumeDatabaseHandler:
         # Adjust layout
         plt.tight_layout(rect=[0, 0, 1, 0.95])  # Leave space for the title
         plt.savefig(os.path.join(self.output_dir, f"release_distribution-{seed_prob}.png")) 
-        plt.close()
-        
-    def test_no_duplicate_triangles_in_released(self):
-        """
-        Test that no volume in the database contains duplicate triangles in the 'released' field.
-        
-        Usage example:
-        
-        db_handler = VolumeDatabaseHandler(...)
-        assert test_no_duplicate_triangles_in_released(db_handler)
-        """
-        for volume in self.fetch_volumes():
-            released = volume["released"]
-            if len(released) != len(set(released)):
-                self.logger.warning(f"Duplicate triangles found in volume with id {volume.get('id', 'unknown')}: {released}")
-                return False
-        self.logger.info("All volumes have unique triangles in 'released'.")
-        return True
-    
-    def insert_volumes_batch(self, volume_list):
-        """
-        Insert multiple volume records into the database.
-        Args:
-            volume_list (List[dict]): List of dictionaries each containing 'volume' and 'location' data.
-        """
-        try:
-            rows = []
-
-            for volume_data in volume_list:
-                try:
-                    volume, thickness, tsunami_potential_ratio, no2d = self.calculate_volume_features(
-                        volume_data["area"],
-                        volume_data["mean_slope"],
-                        volume_data["mean_elevation"]
-                    )
-
-                    row = (
-                        json.dumps(volume_data["released"]),
-                        volume_data["condprob"],
-                        volume_data["area"],
-                        volume_data["mean_elevation"],
-                        volume_data["mean_easting"],
-                        volume_data["mean_northing"],
-                        volume_data["mean_slope"],
-                        json.dumps(volume_data["seed_triangles"]),
-                        volume_data["p_fos_seed"],
-                        volume,
-                        thickness,
-                        tsunami_potential_ratio,
-                        no2d,
-                        volume_data["slopeunit"]
-                    )
-
-                    rows.append(row)
-                except KeyError as e:
-                    self.logger.error(f"Missing field in volume_data: {e} | data: {volume_data}")
-                except Exception as e:
-                    self.logger.error(f"Error preparing volume_data: {e} | data: {volume_data}")
-
-            if rows:
-                self.cursor.executemany("""
-                    INSERT INTO volumes (
-                        released, condprob, area, mean_elevation, mean_easting, mean_northing, mean_slope,
-                        seed_triangles, p_fos_seed, volume, thickness, tsunami_potential_ratio, no2d, slopeunit
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, rows)
-                self.conn.commit()
-
-        except Exception as e:
-            self.logger.error(f"Error during batch insert: {e}")
-
-    def fetch_all_seed_triangles(self):
-        """
-        Fetch all unique seed triangles from the database.
-        Returns:
-            set: A set of all unique seed triangle indices.
-        """
-        seed_triangles_set = set()
-        query = "SELECT seed_triangles FROM volumes"
-        self.cursor.execute(query)
-        for row in self.cursor:
-            # Parse the JSON list of seed triangles
-            triangles = json.loads(row["seed_triangles"])
-            seed_triangles_set.update(triangles)
-        return seed_triangles_set
+        return fig
 
 if __name__ == "__main__":
     main()
