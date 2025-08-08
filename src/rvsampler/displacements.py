@@ -5,6 +5,7 @@ import rasterio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from scipy import ndimage
 
+from concurrent.futures import ThreadPoolExecutor
 from rvsampler.utils import create_dir, read_tif, write_tif, write_content
 from rvsampler.triangulate import Triangulation 
 from rvsampler.set_logg import setup_logger
@@ -164,24 +165,46 @@ class DisplacementProbabilityAggregator:
 
         
         # Compute probabilities and write to files
-        for j, pga_raster in enumerate(pga_rasters):
+        
+            
+        # for j, pga_raster in enumerate(pga_rasters):
+        #     sample_out_dir = os.path.join(self.output_dir, f"sample_{sample_numbers[j]}")
+        #     create_dir(sample_out_dir)
+            
+        #     content = []
+        #     for i, delta in enumerate(self.displacement_thresholds):
+                
+        #         d_is_bigger = log_d > np.log10(delta)
+                
+        #         probs_by_threshold = np.tensordot(ky_density, d_is_bigger, axes=[0,1]) 
+        #         # d_is_bigger.shape: (n_pga_bins, n_ky_bins)
+        #         # ky_density.shape: (n_ky_bins, y_res, x_res)
+        #         # probs.shape: (y_res, x_res, n_pga_bins)
+        #         indices = np.searchsorted(pga_thresholds, pga_raster, side="right") - 1
+        #         indices = np.clip(indices, 0, probs_by_threshold.shape[2] - 1)
+        #         probs = np.take_along_axis(probs_by_threshold, indices[..., None], axis=2)[..., 0]
+                
+        #         # Write to file
+        #         filename = f"exceedance_prob_{i}.tif"
+        #         content.append({"file": filename, "threshold": delta, "sample": sample_numbers[j], 
+        #                         "value": "exceedance prob.", "unit":"", "scale":""})
+        #         write_tif(os.path.join(sample_out_dir, filename), probs, profile, self.logger)
+        #     write_content(content, sample_out_dir)
+        #     if create_lookup_table:
+        #         triangulation.create_lookuptable(sample_out_dir, outfile_name="exceedance_displacement.npz")
+        
+        # Parallel processing of samples
+        def process_sample(j):
+            pga_raster = pga_rasters[j]
             sample_out_dir = os.path.join(self.output_dir, f"sample_{sample_numbers[j]}")
             create_dir(sample_out_dir)
-            
             content = []
             for i, delta in enumerate(self.displacement_thresholds):
-                
                 d_is_bigger = log_d > np.log10(delta)
-                
-                probs_by_threshold = np.tensordot(ky_density, d_is_bigger, axes=[0,1]) 
-                # d_is_bigger.shape: (n_pga_bins, n_ky_bins)
-                # ky_density.shape: (n_ky_bins, y_res, x_res)
-                # probs.shape: (y_res, x_res, n_pga_bins)
+                probs_by_threshold = np.tensordot(ky_density, d_is_bigger, axes=[0,1])
                 indices = np.searchsorted(pga_thresholds, pga_raster, side="right") - 1
                 indices = np.clip(indices, 0, probs_by_threshold.shape[2] - 1)
                 probs = np.take_along_axis(probs_by_threshold, indices[..., None], axis=2)[..., 0]
-                
-                # Write to file
                 filename = f"exceedance_prob_{i}.tif"
                 content.append({"file": filename, "threshold": delta, "sample": sample_numbers[j], 
                                 "value": "exceedance prob.", "unit":"", "scale":""})
@@ -189,6 +212,14 @@ class DisplacementProbabilityAggregator:
             write_content(content, sample_out_dir)
             if create_lookup_table:
                 triangulation.create_lookuptable(sample_out_dir, outfile_name="exceedance_displacement.npz")
+
+        # NOTE: Using ThreadPoolExecutor to parallelize the processing of samples may cause issues. 
+        # Needs to be investigated further.
+        #with ThreadPoolExecutor(max_workers=10) as executor:
+        #    executor.map(process_sample, range(len(pga_rasters)))
+                
+        for j in range(len(pga_rasters)):
+            process_sample(j)
             
     def load_cumulative(self, dir):
         # load json file

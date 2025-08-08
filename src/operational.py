@@ -50,7 +50,7 @@ def main():
     else:
         calculate_displacement_probabilities(rundir)
     
-    calculate_release_volume_probabilities(rundir)
+    calculate_release_probabilities(rundir)
 
 def preprocess_shakemaps(rundir, shakemaps_filename, source_parameters_filename, cumulative=False):
     """ Method to read shakemap and: 
@@ -64,7 +64,7 @@ def preprocess_shakemaps(rundir, shakemaps_filename, source_parameters_filename,
         rundir=rundir,
         thresholds=np.linspace(-3,0,40), 
         aggregate=False,
-        samples=[0,3]
+        samples=None    #[0,3] - or specify a list of samples to read
     )
     
     # Interpolate over computational region and write to files
@@ -81,22 +81,28 @@ def preprocess_shakemaps(rundir, shakemaps_filename, source_parameters_filename,
 def calculate_displacement_probabilities(rundir, cumulative=False):
     """Displacement probabilities.
     """
-    thresholds = np.arange(1, 10, step=1.) # Displacement thresholds in cm.
+    thresholds = np.arange(1, 10, step=2.) # Displacement thresholds in cm.
     dpa = DisplacementProbabilityAggregator(rundir, thresholds, magnitude=7)
     if cumulative:
         dpa.compute_aggregated_probabilities()
     else:
         dpa.compute_probabilities_by_sample(nr_of_pga_thresholds=100)
 
-def calculate_release_volume_probabilities(rundir):
+def calculate_release_probabilities(rundir):
+    displacements_dir = os.path.join(rundir, "displacements")
     with VolumeDatabaseHandler(rundir) as volumes_db:
-        volumes_db.assign_probabilities_to_seed_triangles(
-            displacement_threshold=5.,
-            displacement_dir=os.path.join(rundir, "displacements/sample_0"),
-            table_filename="exceedance_displacement.npz", 
-            column_name = "p_shake"
-        )
-        volumes_db.compute_release_probabilities()
+        for fname in os.listdir(displacements_dir):
+            if fname.startswith("sample_") and os.path.isdir(os.path.join(displacements_dir, fname)):
+                sample_nr = fname.split("_")[-1]
+                displacement_dir = os.path.join(displacements_dir, fname)
+                column_name = f"p_shake_{sample_nr}"
+                volumes_db.assign_probabilities_to_seed_triangles(
+                    displacement_threshold=5.,
+                    displacement_dir=displacement_dir,
+                    table_filename="exceedance_displacement.npz",
+                    column_name=column_name
+                )
+        #volumes_db.compute_release_probabilities()
 
 if __name__ == "__main__":
     main()

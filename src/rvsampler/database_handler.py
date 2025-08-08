@@ -335,14 +335,17 @@ class VolumeDatabaseHandler:
             
         TODO: Probabilities of initial values is just an approximation.
         """
-        # Add column if not present
-        if column_name not in SEED_TRIANGLES_SCHEMA.keys():
+        # Overwrite column if present.
+        try:
             try:
-                self.cursor.execute(f"ALTER TABLE seed_triangles ADD COLUMN {column_name} REAL")
-                self.logger.info(f"Added '{column_name}' column to the seed_triangle table.")
-                self.conn.commit()
-            except Exception as e:
-                self.logger.warning(f"Could not add column '{column_name}': {e}")
+                self.cursor.execute(f"ALTER TABLE seed_triangles DROP COLUMN {column_name}")
+            except Exception:
+                pass
+            self.cursor.execute(f"ALTER TABLE seed_triangles ADD COLUMN {column_name} REAL")
+            self.logger.info(f"Added '{column_name}' column to the seed_triangle table.")
+            self.conn.commit()
+        except Exception as e:
+            self.logger.warning(f"Could not add column '{column_name}': {e}")
         
         # Load lookuptable
         lookup_table_path = os.path.join(displacement_dir, table_filename)
@@ -363,11 +366,9 @@ class VolumeDatabaseHandler:
             triangle_index = row["triangle_id"]
             prob = float(probabilities[triangle_index])
             updates.append((prob, seed_triangle_id))
-
-        
         # Update p_shake for each seed triangle
         self.cursor.executemany(
-            "UPDATE seed_triangles SET p_shake = ? WHERE id = ?",
+            f"UPDATE seed_triangles SET {column_name} = ? WHERE id = ?",
             updates
         )
         self.conn.commit()
