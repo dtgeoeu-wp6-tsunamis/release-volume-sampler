@@ -320,15 +320,13 @@ class VolumeDatabaseHandler:
 
         self.logger.info("Assigned volume, thickness, tsunami_potential_ratio and no2d to all volumes.")
 
-    def assign_probabilities_to_seed_triangles(self, displacement_threshold, displacement_dir,\
+    def assign_probabilities_to_seed_triangles(self, displacement_dir,\
         table_filename="exceedance_displacement.npz", column_name="p_shake"):
         """
         Loads shakemap and computes the release probability of each seed triangle is computed based
         on P(displacement > displacement_threshold) for each individual seed triangle.
         
         Parameters:
-            displacement_threshold (float): Threshold for calculation of probability. 
-                Must lie within the range of calculated probabilities.
             displacement_dir: directory of the computed displacements.
             table_filename (str): filename of the lookuptable.
             column_name (str): Column name of the assigned variable.
@@ -351,10 +349,7 @@ class VolumeDatabaseHandler:
         lookup_table_path = os.path.join(displacement_dir, table_filename)
         self.logger.info(f"Load exceedance probabilities: {lookup_table_path}.")
         displacement_exceedance = np.load(lookup_table_path)
-        thresholds, exceedance_probs = displacement_exceedance["thresholds"], displacement_exceedance["probs"]
-
-        interpolator = interp1d(x=thresholds, y=exceedance_probs, fill_value=(1., 0.), bounds_error=True)
-        probabilities = interpolator(displacement_threshold)
+        probabilities = displacement_exceedance["probs"]
 
         # Fetch all triangle_ids from seed_triangles
         self.cursor.execute("SELECT id, triangle_id FROM seed_triangles")

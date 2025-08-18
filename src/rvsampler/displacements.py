@@ -57,10 +57,8 @@ def displacement(logky, logpga, M=None, logpgv=None, model="scalar"):
 
 class DisplacementProbabilityAggregator:
     
-    def __init__(self, rundir, displacement_thresholds, magnitude):
+    def __init__(self, rundir, magnitude):
         self.rundir = rundir
-        self.displacement_thresholds = displacement_thresholds
-        
         self.ky_dir = os.path.join(rundir, "slope_analysis", "yield_acceleration", "cumulative")
         self.pga_dir = os.path.join(rundir, "shakemaps")
         
@@ -81,16 +79,15 @@ class DisplacementProbabilityAggregator:
         #        for row in reader:
         #            self.source_parameters.append(row)
 
-    def compute_aggregated_probabilities(self, create_lookup_table=True):
+    def compute_aggregated_probabilities(self, displacement_threshold, create_lookup_table=True):
         """
-        Computation of exceedance probability P(displacement > delta) given the ditribution
+        Computation of exceedance probability P(displacement > delta) given the distribution
         of PGA values represented by the cumulative in the shakemaps dir.
         """
         # Create output dir
         self.logger.info("Calculating displacement probabilities for aggregated shakemaps.")
- 
-        if create_lookup_table:
-            triangulation = Triangulation(self.rundir)
+        cumulative_out_dir = os.path.join(self.output_dir, "cumulative")
+        create_dir(cumulative_out_dir, self.logger, clear=True)
 
         # Load and compute probability densities.
         self.logger.info(f"Loads cumulative probabilities: {self.ky_dir}")
@@ -108,28 +105,26 @@ class DisplacementProbabilityAggregator:
 
         # Compute probabilities and write to files
         content = []
-        for i, delta in enumerate(self.displacement_thresholds):
-            self.logger.info(f"Delta: {delta}")
-            d_is_bigger = log_d > np.log10(delta)
-            probs = np.sum((pga_density[:,np.newaxis]*ky_density[np.newaxis,:])[d_is_bigger,:], axis=0)
-            
-            # Non vectorized implementation (slow).
-            # probs = np.zeros(pga_density.shape[1:])
-            # for i in range(pga_density.shape[1]):
-            #     for j in range(pga_density.shape[2]):
-            #         probs[i,j] = np.sum(np.outer(pga_density[:,i,j], ky_density[:,i,j])[d_is_bigger])
-            
-            # Write to file
-            filename = f"exceedance_prob_{i}.tif"
-            content.append({"file": filename, "threshold": delta, "value": "exceedance prob.", 
-                            "unit":"", "scale":""})
-            write_tif(os.path.join(self.output_dir, filename), probs, profile, self.logger)
-        write_content(content, self.output_dir)
+        d_is_bigger = log_d > np.log10(displacement_threshold)
+        probs = np.sum((pga_density[:,np.newaxis]*ky_density[np.newaxis,:])[d_is_bigger,:], axis=0)
         
+        # Non vectorized implementation (slow).
+        # probs = np.zeros(pga_density.shape[1:])
+        # for i in range(pga_density.shape[1]):
+        #     for j in range(pga_density.shape[2]):
+        #         probs[i,j] = np.sum(np.outer(pga_density[:,i,j], ky_density[:,i,j])[d_is_bigger])
+        
+        # Write to file
+        filename = f"exceedance_prob.tif"
+        content.append({"file": filename, "threshold": displacement_threshold, "value": "exceedance prob.", 
+                        "unit":"", "scale":""})
+        write_tif(os.path.join(cumulative_out_dir, filename), probs, profile, self.logger)
+        write_content(content, cumulative_out_dir)
         if create_lookup_table:
-            triangulation.create_lookuptable(self.output_dir, outfile_name="exceedance_displacement.npz")
+            triangulation = Triangulation(self.rundir)
+            triangulation.create_lookuptable(cumulative_out_dir, outfile_name="exceedance_displacement.npz")
 
-    def compute_probabilities_by_sample(self, nr_of_pga_thresholds, create_lookup_table=True):
+    def compute_probabilities_by_sample(self, nr_of_pga_thresholds, displacement_threshold, create_lookup_table=True):
         """
         Estimation of conditional probabilities P(displacement > delta | PGA). This is done by 
         calculting displacement on a grid of threshold values for yield acceleration (k_y) and PGA 
@@ -139,6 +134,7 @@ class DisplacementProbabilityAggregator:
         
         Parameters:
             nr_of_pga_thresholds: Number of thresholds used for binning of pga values.
+            displacement_threshold: Threshold for exceedance probability.
             
         Note: Uncertainty in displacement is currently not taken into account.
         """
@@ -162,64 +158,26 @@ class DisplacementProbabilityAggregator:
         pga_centers = 0.5*(pga_thresholds[1:] + pga_thresholds[:-1])
         kys, pgas = np.meshgrid(ky_centers, pga_centers)
         log_d, log_sigma = displacement(kys, pgas, self.magnitude) 
-
+        
+        d_is_bigger = log_d > np.log10(displacement_threshold)
+        probs_by_threshold = np.tensordot(ky_density, d_is_bigger, axes=[0, 1])  # shape: (n_pga_bins, y, x)
         
         # Compute probabilities and write to files
-        
-            
-        # for j, pga_raster in enumerate(pga_rasters):
-        #     sample_out_dir = os.path.join(self.output_dir, f"sample_{sample_numbers[j]}")
-        #     create_dir(sample_out_dir)
-            
-        #     content = []
-        #     for i, delta in enumerate(self.displacement_thresholds):
-                
-        #         d_is_bigger = log_d > np.log10(delta)
-                
-        #         probs_by_threshold = np.tensordot(ky_density, d_is_bigger, axes=[0,1]) 
-        #         # d_is_bigger.shape: (n_pga_bins, n_ky_bins)
-        #         # ky_density.shape: (n_ky_bins, y_res, x_res)
-        #         # probs.shape: (y_res, x_res, n_pga_bins)
-        #         indices = np.searchsorted(pga_thresholds, pga_raster, side="right") - 1
-        #         indices = np.clip(indices, 0, probs_by_threshold.shape[2] - 1)
-        #         probs = np.take_along_axis(probs_by_threshold, indices[..., None], axis=2)[..., 0]
-                
-        #         # Write to file
-        #         filename = f"exceedance_prob_{i}.tif"
-        #         content.append({"file": filename, "threshold": delta, "sample": sample_numbers[j], 
-        #                         "value": "exceedance prob.", "unit":"", "scale":""})
-        #         write_tif(os.path.join(sample_out_dir, filename), probs, profile, self.logger)
-        #     write_content(content, sample_out_dir)
-        #     if create_lookup_table:
-        #         triangulation.create_lookuptable(sample_out_dir, outfile_name="exceedance_displacement.npz")
-        
-        # Parallel processing of samples
-        def process_sample(j):
-            pga_raster = pga_rasters[j]
+        for j, pga_raster in enumerate(pga_rasters):
             sample_out_dir = os.path.join(self.output_dir, f"sample_{sample_numbers[j]}")
-            create_dir(sample_out_dir)
-            content = []
-            for i, delta in enumerate(self.displacement_thresholds):
-                d_is_bigger = log_d > np.log10(delta)
-                probs_by_threshold = np.tensordot(ky_density, d_is_bigger, axes=[0,1])
-                indices = np.searchsorted(pga_thresholds, pga_raster, side="right") - 1
-                indices = np.clip(indices, 0, probs_by_threshold.shape[2] - 1)
-                probs = np.take_along_axis(probs_by_threshold, indices[..., None], axis=2)[..., 0]
-                filename = f"exceedance_prob_{i}.tif"
-                content.append({"file": filename, "threshold": delta, "sample": sample_numbers[j], 
-                                "value": "exceedance prob.", "unit":"", "scale":""})
-                write_tif(os.path.join(sample_out_dir, filename), probs, profile, self.logger)
+            create_dir(sample_out_dir, self.logger, clear=True)
+            
+            indices = np.searchsorted(pga_thresholds, pga_raster, side="right") - 1
+            indices = np.clip(indices, 0, probs_by_threshold.shape[2] - 1)
+            probs = np.take_along_axis(probs_by_threshold, indices[..., None], axis=2)[..., 0]
+            filename = f"exceedance_prob.tif"
+            content = [{"file": filename, "threshold": displacement_threshold, "sample": sample_numbers[j],
+                        "value": "exceedance prob.", "unit": "", "scale": ""}]
+            write_tif(os.path.join(sample_out_dir, filename), probs, profile, self.logger)
             write_content(content, sample_out_dir)
             if create_lookup_table:
                 triangulation.create_lookuptable(sample_out_dir, outfile_name="exceedance_displacement.npz")
-
-        # NOTE: Using ThreadPoolExecutor to parallelize the processing of samples may cause issues. 
-        # Needs to be investigated further.
-        #with ThreadPoolExecutor(max_workers=10) as executor:
-        #    executor.map(process_sample, range(len(pga_rasters)))
-                
-        for j in range(len(pga_rasters)):
-            process_sample(j)
+        
             
     def load_cumulative(self, dir):
         # load json file

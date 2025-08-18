@@ -11,8 +11,8 @@ class ShakemapsReader:
     """
     Class for loading, aggregation and interpolation of shakemaps.
     """
-    def __init__(self, rundir, shakemaps_filename, source_parameters_filename=None, thresholds=None,
-                 weights=None, aggregate=False, samples=None):
+    def __init__(self, rundir, shakemaps_filename, source_parameters_filename=None,
+                 weights=None):
         
         self.shakemaps_filename = shakemaps_filename
         self.source_parameters_filename = source_parameters_filename
@@ -25,19 +25,6 @@ class ShakemapsReader:
         self.weights = weights
         self.aggregate = False
         self.nr_of_maps = len(self.shakemaps[0]["Z_pga"])
-        # samples only applied if aggregate is False
-        self.samples = samples if samples is not None else range(self.nr_of_maps) 
-        
-        if aggregate:
-            self.aggregate = True
-            assert thresholds is not None, "Thresholds must be provided if aggregate is True."
-            self.thresholds = thresholds
-            if self.weights is None:
-                self.logger.warning("Weights not provided. Assumess uniformly weighted samples.")
-                self.weights = np.ones(len(self.nr_of_maps))/len(self.nr_of_maps)
-            else: 
-                self.weights = weights
-            self.compute_cumulative()
        
         self.logger.info(self.shakemaps[0].keys()) 
         self.logger.info(f"Number of lon-lat points in shakemaps: {len(self.shakemaps)}")
@@ -49,71 +36,70 @@ class ShakemapsReader:
         # Function to extract relevant value from shakemap.
         Z, H = [10**np.array(point[shake_param]) for shake_param in ["Z_pga", "H_pga"]]
         return np.log10(np.sqrt(Z**2 + H**2))
-    
-    def write_shakemaps_to_rasters(self, profile, bounds, interpolation_method):
+
+    def write_cumulative_distribution(self, profile, bounds, interpolation_method, thresholds, weights=None):
+        if weights is None:
+            self.logger.warning("Weights not provided. Assumess uniformly weighted samples.")
+            weights = np.ones(self.nr_of_maps)/self.nr_of_maps
         
-        if self.aggregate:
-            shakemap_content = []
-            for i, threshold in enumerate(self.thresholds):
-                cumulative = self.interpolate_shakemap(
-                                                value="cumulative", 
-                                                sample=i, 
-                                                bbox=bounds, 
-                                                n_cols=profile["width"], 
-                                                n_rows=profile["height"],
-                                                interpolation_method=interpolation_method)
-                filename = f"pga_cum_{i}.tif"
-                shakemap_content.append({
-                    "file": filename,
-                    "threshold":threshold,
-                    "value":"Probability",
-                    "scale":"log10",
-                    "unit":"g"
-                })
-                write_tif(os.path.join(self.shakemaps_out_dir, filename), cumulative, profile, self.logger)
-        else:
-            shakemap_content = []
-            for i in self.samples:
-                logpga = self.interpolate_shakemap(
-                                                value="logpga", 
-                                                sample=i, 
-                                                bbox=bounds, 
-                                                n_cols=profile["width"], 
-                                                n_rows=profile["height"],
-                                                interpolation_method=interpolation_method)
-                filename = f"pga_{i}.tif"
-                shakemap_content.append({
-                    "file": filename,
-                    "value": "logpga",
-                    "sample": i,
-                    "scale": "log10",
-                    "unit": "g"
-                })
-                write_tif(os.path.join(self.shakemaps_out_dir, filename), logpga, profile, self.logger)
+        # Compute cumulative pointwise
+        self.compute_cumulative(weights=weights, thresholds=thresholds)
+        
+        # Write to rasters
+        shakemap_content = []
+        for i, threshold in enumerate(thresholds):
+            cumulative = self.interpolate_shakemap(
+                                            value="cumulative", 
+                                            sample=i, 
+                                            bbox=bounds, 
+                                            n_cols=profile["width"], 
+                                            n_rows=profile["height"],
+                                            interpolation_method=interpolation_method)
+            filename = f"pga_cum_{i}.tif"
+            shakemap_content.append({
+                "file": filename,
+                "threshold":threshold,
+                "value":"Probability",
+                "scale":"log10",
+                "unit":"g"
+            })
+            write_tif(os.path.join(self.shakemaps_out_dir, filename), cumulative, profile, self.logger)
         write_content(shakemap_content, self.shakemaps_out_dir)
-    
+
+    def write_shakemaps_to_rasters(self, profile, bounds, interpolation_method, samples=None):
+        samples = samples if samples is not None else range(self.nr_of_maps) 
+        shakemap_content = []
+        for i in samples:
+            logpga = self.interpolate_shakemap(
+                                            value="logpga", 
+                                            sample=i, 
+                                            bbox=bounds, 
+                                            n_cols=profile["width"], 
+                                            n_rows=profile["height"],
+                                            interpolation_method=interpolation_method)
+            filename = f"pga_{i}.tif"
+            shakemap_content.append({
+                "file": filename,
+                "value": "logpga",
+                "sample": i,
+                "scale": "log10",
+                "unit": "g"
+            })
+            write_tif(os.path.join(self.shakemaps_out_dir, filename), logpga, profile, self.logger)
+        write_content(shakemap_content, self.shakemaps_out_dir)
+
     def compute_logpga(self):
         # Apply the shake value function to each point in the shakemaps
         self.logger.info(f"Computing shake value of shakemaps")
         for point in self.shakemaps:
             point["logpga"] = ShakemapsReader.logpga(point)
     
-    def compute_cumulative(self):
+    def compute_cumulative(self, thresholds, weights):
         # Compute cumulative probability of given value over entire shakemap grid. Save in same structure as input file.
         # Load shakemaps from file 
         self.logger.info("Computing cumulative shakemaps")
         for point in self.shakemaps:
-            point["cumulative"] =  cumulative(point["logpga"], self.thresholds, self.weights)
-        
-        # This is for the old shakemap file
-        #for _,point in shakemaps.items():
-        #    shakemaps_cumulative.append(
-        #        {
-        #            "lon": point["lon"],
-        #            "lat": point["lat"],
-        #            "cumulative": cumulative(shake_value(point), thresholds, self.weights)
-        #        }
-        #    )
+            point["cumulative"] =  cumulative(point["logpga"], thresholds, weights)
     
     def interpolate_shakemap(self, value, sample, bbox, n_rows, n_cols, interpolation_method):
         # Create grid interpolator
