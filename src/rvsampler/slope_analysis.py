@@ -44,7 +44,7 @@ class SlopeAnalysis:
             name of raster with calculated slopes. Has to be located in rundirectory. Defaults to slope.tif.
         """
         self.out_dir = os.path.join(rundir, "slope_analysis")
-        create_dir(self.out_dir)
+        create_dir(self.out_dir, clear=True)
         self.logger = setup_logger("slopeanalysis", self.out_dir)
         #self.physical_parameters = physical_parameters
         self.slopefile = slopefile
@@ -258,6 +258,11 @@ class SlopeAnalysis:
         
         return np.log10(fos), np.log10(ky)
 
+    def completed(self):
+        # Create empty completed file in folder to verify completion.
+        self.logger.info("Slope analysis completed, writing completion flag.")
+        with open(os.path.join(self.out_dir, "completed"), "w") as f:
+            pass
 
 class Node():
     leaf_nodes = []

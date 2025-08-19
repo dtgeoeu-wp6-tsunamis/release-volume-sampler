@@ -42,7 +42,6 @@ VOLUMES_SCHEMA = {
     "cluster": "INTEGER",
     "cluster_center_dist": "REAL",
     "is_representative": "BOOLEAN",
-    "p_shake": "REAL",  # Probability from shakemap
 }
 
 SEED_TRIANGLES_SCHEMA = {
@@ -150,7 +149,7 @@ class VolumeDatabaseHandler:
             self.cursor.execute(create_seed_table_sql)
             
             self.conn.commit()
-            self.logger.info("Database initialized or already exists.")
+            self.logger.info(f"Database {self.db_file} initialized or already exists.")
         except Exception as e:
             self.logger.info(f"Error initializing database: {e}")
 

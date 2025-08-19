@@ -49,24 +49,31 @@ def main():
     }
     logger.info(f"Configuration: {config}")
     # Run steps if not already done.
-    if os.path.exists(os.path.join(rundir, "slope.tif")):
+    if os.path.exists(os.path.join(rundir, "completed")):
         logger.info("Initialization already done, skipping.")
     else:
         initialize(**config)
-    if os.path.exists(os.path.join(rundir, "slope_analysis", "slopeanalysis.log")):
+    if os.path.exists(os.path.join(rundir, "slope_analysis", "completed")):
         logger.info("Slope analysis already done, skipping.")
     else:
         execute_slope_analysis(rundir)
-    if os.path.exists(os.path.join(rundir, "triangulation", "triangulate.log")):
+    if os.path.exists(os.path.join(rundir, "triangulation", "completed")):
         logger.info("Triangulation already done, skipping.")
     else:
         triangulate_domain(rundir)
-    if os.path.exists(os.path.join(rundir, "volumes","volume_sampler.log")):
+    if os.path.exists(os.path.join(rundir, "volumes", "completed")):
         logger.info("Release volume sampling already done, skipping.")
     else:
+        # Clear volumes directory if exists
+        volumes_dir = os.path.join(rundir, "volumes")
+        if os.path.exists(volumes_dir):
+            shutil.rmtree(volumes_dir)
+        
         sample_release_volumes(rundir)
         assign_volume_features(rundir)
         cluster_release_volumes(rundir)
+        with open(os.path.join(rundir, "volumes", "completed"), "w") as f:
+            pass
     if os.path.exists(os.path.join(rundir, "volumes", "volumes.csv")):
         logger.info("Release volumes already written to csv and rasters, skipping.")
     else:
@@ -95,6 +102,10 @@ def initialize(rundir, bathyfile, soilregions_filename, soil_parameters_filename
     
     slope(bathyfile, output_dir=rundir, logfile=logfile)
     aspect(bathyfile, output_dir=rundir, logfile=logfile)
+    
+    with open(os.path.join(rundir, "completed"), "w") as f:
+        pass  # Just create an empty file 
+    
     return rundir
 
 
@@ -127,6 +138,8 @@ def execute_slope_analysis(rundir):
     ky_thresholds = np.linspace(-3,1, num=50)
     sa.compute_cumulative(ky_thresholds, feature_name="logky", write=True)
 
+    sa.completed()
+    
 def triangulate_domain(rundir):
     config = {
         "rundir": rundir,
@@ -164,9 +177,10 @@ def triangulate_domain(rundir):
     cumulative_dir = os.path.join(rundir, "slope_analysis", "fos", "cumulative")
     outfile_name = "cumulative_fos.npz" # Writes to triangulation dir..
     triang.create_lookuptable(cumulative_dir, outfile_name)
+    triang.completed()
 
 def sample_release_volumes(rundir):
-    
+
     # Initialize the database.
     with VolumeDatabaseHandler(rundir) as db:
         db.initialize_db()
@@ -194,7 +208,7 @@ def sample_release_volumes(rundir):
         "recursive_probability_threshold": 1.e-4,
         "seed_triangle_probability_threshold": 0.05,
         "max_workers":10,
-        "max_n_seed_triangles": 2000,
+        "max_n_seed_triangles": 50,
         
         # Slopeunit parameters.
         "use_slopeunits": False, 
@@ -211,6 +225,7 @@ def sample_release_volumes(rundir):
     # Verify that no volumes contain duplicate triangles.
     with VolumeDatabaseHandler(rundir) as db:
         assert db.test_no_duplicate_triangles_in_released()
+    
     
 def assign_volume_features(rundir):
     """

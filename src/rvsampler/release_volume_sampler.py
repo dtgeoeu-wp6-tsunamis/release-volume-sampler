@@ -85,7 +85,7 @@ class RecursiveReleaseAnalysis:
     def __init__(self, rundir, cumprob_logfos_path, utm_epsg_code):
         self.rundir = rundir
         self.output_dir = os.path.join(rundir, "volumes")
-        create_dir(self.output_dir)
+        create_dir(self.output_dir, clear=False)
         self.logger = setup_logger("volume_sampler", self.output_dir)
         
         self.utm_epsg_code = utm_epsg_code             # Projection used for calculation of areas and sides of triangles.
@@ -229,6 +229,10 @@ class RecursiveReleaseAnalysis:
         
         self.logger.info("Write seed triangles to database.")
         with VolumeDatabaseHandler(self.rundir) as volumes_db:
+            print(volumes_db.db_file)
+            volumes_db.cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            print([row[0] for row in volumes_db.cursor.fetchall()])
+            
             volumes_db.insert_seed_triangles(seed_triangles, 
                                              self.triangulation.slopeunits[seed_triangles],
                                              seed_probability[seed_triangles])
@@ -301,6 +305,12 @@ class RecursiveReleaseAnalysis:
             volume["mean_northing"] = self.triangulation.northing[np.unique(self.triangulation.triangles[volume["released"]]).flatten()].mean()
             volume["slopeunit"] = int(self.triangulation.slopeunits[seed_triangles[0]])
         return volumes
+    
+    def completed(self):
+        # Create empty completed file in folder to verify completion.
+        self.logger.info("Release analysis completed, writing completion flag.")
+        with open(os.path.join(self.output_dir, "completed"), "w") as f:
+            pass
 
 def process_initial_state(initial_state, triangulation, sampler, seed_probability):
     volumes = []

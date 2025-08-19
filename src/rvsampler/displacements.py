@@ -124,7 +124,7 @@ class DisplacementProbabilityAggregator:
             triangulation = Triangulation(self.rundir)
             triangulation.create_lookuptable(cumulative_out_dir, outfile_name="exceedance_displacement.npz")
 
-    def compute_probabilities_by_sample(self, nr_of_pga_thresholds, displacement_threshold, create_lookup_table=True):
+    def compute_probabilities_by_sample(self, displacement_threshold, nr_of_pga_thresholds=100, create_lookup_table=True):
         """
         Estimation of conditional probabilities P(displacement > delta | PGA). This is done by 
         calculting displacement on a grid of threshold values for yield acceleration (k_y) and PGA 
@@ -217,4 +217,8 @@ class DisplacementProbabilityAggregator:
         thresholds = np.linspace(start=samples.min(), stop=samples.max(), num=nr_of_thresholds)
         
         return(samples, thresholds, profile, sample_numbers)
-    
+
+    def completed(self):
+        self.logger.info("Displacement probability processing completed.")
+        with open(os.path.join(self.output_dir, "completed"), "w") as f:
+            pass

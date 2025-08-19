@@ -18,7 +18,7 @@ class ShakemapsReader:
         self.source_parameters_filename = source_parameters_filename
         self.shakemaps_out_dir = os.path.join(rundir, "shakemaps")
         self.logger = setup_logger("shakemaps_reader", self.shakemaps_out_dir)
-        create_dir(self.shakemaps_out_dir)
+        create_dir(self.shakemaps_out_dir, clear=True)
         with open(self.shakemaps_filename, 'r') as f:
             self.shakemaps = json.load(f)
         self.compute_logpga()
@@ -116,3 +116,8 @@ class ShakemapsReader:
         grid_int = np.meshgrid(np.linspace(bbox.left, bbox.right, num=n_cols), np.linspace(bbox.bottom, bbox.top, num=n_rows), indexing='ij')
         shake_values = shake_interp(grid_int)
         return(np.flip(shake_values,-1).T)
+
+    def completed(self):
+        self.logger.info("Shakemaps processing completed.")
+        with open(os.path.join(self.shakemaps_out_dir, "completed"), "w") as f:
+            pass

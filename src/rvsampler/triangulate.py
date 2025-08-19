@@ -1,4 +1,4 @@
-import tensorflow as tf
+#import tensorflow as tf
 import matplotlib.pyplot as plt
 from scipy.spatial import Delaunay
 import rasterio
@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from rvsampler.utils import create_dir, read_tif
 from rvsampler.set_logg import setup_logger
-from scipy.spatial import cKDTree
 
 def main():
     """ To ensure that modules are imports works, run the script as a module.
@@ -55,11 +54,12 @@ class Triangulate:
             resolution (Tuple[int, int]): Grid dimension for the vertices in the initial triangulation.
             slopeunitfile (str): Path to slope unit file. TODO:Specify coordinates system.
         """
-
+        import tensorflow as tf # Avoid loading tensorflow when importing this module.
+        self.tf = tf
         # Load real raster data
         self.rundir = rundir
         self.output_dir = os.path.join(rundir, "triangulation")
-        create_dir(self.output_dir)
+        create_dir(self.output_dir, clear=True)
         self.logger = setup_logger("triangulate", self.output_dir)
         self.logger.info(f"Initialize triangulation with bathyfile: {bathyfile}, UTM EPSG code: {utm_epsg_code}, resolution: {resolution}.")
         
@@ -77,12 +77,12 @@ class Triangulate:
         # Initial Triangulation 
         self.triang_points, self.triang_point_is_boundary = self.create_points(self.resolution)
         self.tri = Delaunay(self.triang_points)
-        self.vertices = tf.Variable(self.triang_points, dtype=tf.float32)  # TensorFlow variable for optimization
+        self.vertices = tf.Variable(self.triang_points, dtype=self.tf.float32)  # TensorFlow variable for optimization
         
         # Points for evaluation of topography.
         all_eval_points, eval_point_is_boundary = self.create_points()
-        self.eval_points  = tf.cast(all_eval_points[eval_point_is_boundary == 0], tf.float32) # remove boundary points
-        self.true_elevations = tf.cast(self.target_elevation_function(self.eval_points), tf.float32)
+        self.eval_points  = self.tf.cast(all_eval_points[eval_point_is_boundary == 0], self.tf.float32) # remove boundary points
+        self.true_elevations = self.tf.cast(self.target_elevation_function(self.eval_points), self.tf.float32)
         
         if os.path.exists(slopeunitfile):
             self.slopeunitfile = slopeunitfile
@@ -113,14 +113,14 @@ class Triangulate:
         rows = np.clip(rows, 0, self.bathy.shape[0] - 1)
         cols = np.clip(cols, 0, self.bathy.shape[1] - 1)
         
-        return tf.cast(np.nan_to_num(self.bathy[rows, cols]), tf.float32)  # Synthetic elevation function
+        return self.tf.cast(np.nan_to_num(self.bathy[rows, cols]), self.tf.float32)  # Synthetic elevation function
     
     def get_3d_vertices(self, tri_indices): 
-        vertice_elevations = tf.reshape(self.target_elevation_function(self.vertices),[-1,1])
-        vertices_3d = tf.concat([self.vertices, vertice_elevations], axis=1)
+        vertice_elevations = self.tf.reshape(self.target_elevation_function(self.vertices),[-1,1])
+        vertices_3d = self.tf.concat([self.vertices, vertice_elevations], axis=1)
         
         # Gather all vertices for the triangles containing the points
-        p1_p2_p3 = tf.gather(vertices_3d, tri_indices)  # Get the triangle's vertices for the valid points
+        p1_p2_p3 = self.tf.gather(vertices_3d, tri_indices)  # Get the triangle's vertices for the valid points
         p1, p2, p3 = p1_p2_p3[:,0,:], p1_p2_p3[:,1,:], p1_p2_p3[:,2,:]
         return(p1, p2, p3)
 
@@ -132,7 +132,7 @@ class Triangulate:
         
         # Step 1: Find which triangle contains each point
         # Assumption: points are 2D, so we need to add them to the 3D triangulation.
-        points = tf.convert_to_tensor(points, dtype=tf.float32)
+        points = self.tf.convert_to_tensor(points, dtype=self.tf.float32)
 
         # Find the triangle containing each point
         simplexes = self.tri.find_simplex(points)  # Index of triangle containing each point
@@ -145,8 +145,8 @@ class Triangulate:
         p1, p2, p3 = self.get_3d_vertices(tri_indices)
         
         # Compute the normal vector of the plane for each triangle using the cross product
-        normal = tf.linalg.cross(p2 - p1, p3 - p1)
-        a, b, c = tf.unstack(normal, axis=1)  # Extract coefficients a, b, c of the plane
+        normal = self.tf.linalg.cross(p2 - p1, p3 - p1)
+        a, b, c = self.tf.unstack(normal, axis=1)  # Extract coefficients a, b, c of the plane
 
         # Compute the d coefficient of the plane equation (ax + by + cz + d = 0)
         d = -(a * p1[:, 0] + b * p1[:, 1] + c * p1[:, 2])
@@ -155,10 +155,10 @@ class Triangulate:
         elevation_valid = -(a * valid_points[:, 0] + b * valid_points[:, 1] + d) / c
  
         # Use tf.scatter_nd to create the full elevation tensor
-        elevation = tf.scatter_nd(
-            indices=tf.where(simplex_is_valid),
+        elevation = self.tf.scatter_nd(
+            indices=self.tf.where(simplex_is_valid),
             updates=elevation_valid,
-            shape=[tf.shape(points)[0]]
+            shape=[self.tf.shape(points)[0]]
         )
         return elevation
     
@@ -168,34 +168,34 @@ class Triangulate:
         vectorized for efficiency.
         """
         # Mask triangles with boundary points only
-        boundary_mask = tf.reduce_all(tf.gather(self.triang_point_is_boundary, self.tri.simplices) == 1, axis=1)
-        non_boundary_triangles = tf.boolean_mask(self.tri.simplices, ~boundary_mask)
+        boundary_mask = self.tf.reduce_all(self.tf.gather(self.triang_point_is_boundary, self.tri.simplices) == 1, axis=1)
+        non_boundary_triangles = self.tf.boolean_mask(self.tri.simplices, ~boundary_mask)
 
         p1, p2, p3 = self.get_3d_vertices(non_boundary_triangles)
         # Gather vertices for each triangle (shape: [num_triangles, 3, 2])
-        #p1, p2, p3 = tf.gather(self.vertices, non_boundary_triangles[:, 0]), \
-        #    tf.gather(self.vertices, non_boundary_triangles[:, 1]), \
-        #    tf.gather(self.vertices, non_boundary_triangles[:, 2])
+        #p1, p2, p3 = self.tf.gather(self.vertices, non_boundary_triangles[:, 0]), \
+        #    self.tf.gather(self.vertices, non_boundary_triangles[:, 1]), \
+        #    self.tf.gather(self.vertices, non_boundary_triangles[:, 2])
 
         # Compute edge lengths (shape: [num_triangles])
-        edge1 = tf.norm(p2 - p1, axis=1)
-        edge2 = tf.norm(p3 - p2, axis=1)
-        edge3 = tf.norm(p1 - p3, axis=1)
+        edge1 = self.tf.norm(p2 - p1, axis=1)
+        edge2 = self.tf.norm(p3 - p2, axis=1)
+        edge3 = self.tf.norm(p1 - p3, axis=1)
 
         # Compute perimeter and semi-perimeter
         perimeter = edge1 + edge2 + edge3
         semi_perimeter = perimeter / 2.0
 
         # Compute area using Heron's formula
-        area = tf.sqrt(semi_perimeter * (semi_perimeter - edge1) * (semi_perimeter - edge2) * (semi_perimeter - edge3))
+        area = self.tf.sqrt(semi_perimeter * (semi_perimeter - edge1) * (semi_perimeter - edge2) * (semi_perimeter - edge3))
 
         # Calculate aspect ratio for each triangle
-        aspect_ratio = (12 * tf.sqrt(3.0) * area) / (perimeter ** 2)
+        aspect_ratio = (12 * self.tf.sqrt(3.0) * area) / (perimeter ** 2)
 
         # Step 7: Compute shape loss
-        shape_loss = tf.reduce_mean(1.0 - aspect_ratio)  # Sum of penalties for low aspect ratio
+        shape_loss = self.tf.reduce_mean(1.0 - aspect_ratio)  # Sum of penalties for low aspect ratio
         # Step 8: Add a penalty for large triangle areas (squared area penalty)
-        area_loss = tf.reduce_mean(area ** 2)
+        area_loss = self.tf.reduce_mean(area ** 2)
 
         return shape_loss, area_loss
     
@@ -213,11 +213,11 @@ class Triangulate:
     def fit(self, num_iterations, batch_size, shape_weight, area_weight, elevation_weight):
         
         self.logger.info(f"Start optimization with {num_iterations} iterations and batch size {batch_size} \
-            and shape_weight {shape_loss}, area_weight: {area_weight}, elevation_weight: {elevation_weight}.")
+            and shape_weight {shape_weight}, area_weight: {area_weight}, elevation_weight: {elevation_weight}.")
         
         # 4. Optimization Loop
-        optimizer = tf.optimizers.Adam(learning_rate=1., beta_1=0.7)
-        interior_mask =  tf.cast(1- self.triang_point_is_boundary, dtype=tf.float32)
+        optimizer = self.tf.optimizers.Adam(learning_rate=1., beta_1=0.7)
+        interior_mask =  self.tf.cast(1- self.triang_point_is_boundary, dtype=self.tf.float32)
 
         # Create batches from the evaluation points
         batch_generator = self.create_batches(batch_size)
@@ -225,20 +225,20 @@ class Triangulate:
         for i in range(num_iterations):
             batch_indices = next(batch_generator)  # Get the next batch of points
             self.tri = Delaunay(self.vertices.numpy())
-            with tf.GradientTape() as tape:
+            with self.tf.GradientTape() as tape:
                 # Shape term: Penalize triangles with bad aspect ratios 
                 shape_loss, area_loss = self.compute_shape_loss()
                 
                 # Evaluate predicted and true elevations at sample points within triangles
-                predicted_elevations = self.evaluate_triangulated_elevation(tf.gather(self.eval_points, batch_indices))
-                elevation_loss = tf.reduce_mean((predicted_elevations - tf.gather(self.true_elevations, batch_indices)) ** 2)  # L2 difference from true elevation
+                predicted_elevations = self.evaluate_triangulated_elevation(self.tf.gather(self.eval_points, batch_indices))
+                elevation_loss = self.tf.reduce_mean((predicted_elevations - self.tf.gather(self.true_elevations, batch_indices)) ** 2)  # L2 difference from true elevation
                 
                 # Weighted loss
                 weighted_loss = shape_weight*shape_loss + area_weight*area_loss + elevation_weight*elevation_loss # Add loss for points outside of domain?
             gradients = tape.gradient(weighted_loss, [self.vertices])
             
             # Apply mask to gradients: zero out gradients for boundary points
-            gradients_fixed = gradients[0] * tf.reshape(interior_mask, (-1, 1)) 
+            gradients_fixed = gradients[0] * self.tf.reshape(interior_mask, (-1, 1)) 
             optimizer.apply_gradients([(gradients_fixed, self.vertices)])
             
             if i % 50 == 0:
@@ -400,6 +400,12 @@ Area loss: {area_weight*area_loss.numpy():.10e}
             vtkfile_out,  # str, os.PathLike, or buffer/open file
             # file_format="vtk",  # optional if first argument is a path; inferred from extension
         )
+    
+    def completed(self):
+        # Create empty completed file in folder to verify completion.
+        self.logger.info("Triangulation created, writing completion flag.")
+        with open(os.path.join(self.output_dir, "completed"), "w") as f:
+            pass
 
 
 class Triangulation:
@@ -625,6 +631,12 @@ class Triangulation:
                 self.logger.info(f"Processing raster {raster_index} is complete.")
 
         np.savez(outfile, thresholds=thresholds, probs=triangle_probs) 
+    
+    def completed(self):
+        # Create empty completed file in folder to verify completion.
+        self.logger.info("Triangulation created, writing completion flag.")
+        with open(os.path.join(self.output_dir, "completed"), "w") as f:
+            pass
 
 if __name__ == "__main__":
     main()

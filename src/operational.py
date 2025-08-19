@@ -36,21 +36,14 @@ def main():
         "shakemaps_filename": os.path.join(rootdir, "input/shakemaps/PGA_data/H_Z_pda_data_log10_G.json"),
         "source_parameters_filename": os.path.join(rootdir, "input/shakemaps/messina_1908/source_parameters.csv")
     }
-    displacements_exceedance_params = {
-        "cumulative_dir": os.path.join(rundir, "displacements"),
-        "outfile_name": "exceedance_displacement.npz"
-    }
-    
-    if os.path.exists(os.path.join(rundir, "shakemaps")):
+    if os.path.exists(os.path.join(rundir, "shakemaps", "completed")):
         logger.info("Preprocessing of shakemaps already done, skipping.")
     else:
         preprocess_shakemaps(rundir, **shakemaps_params)
-    if os.path.exists(os.path.join(rundir, "displacements")):
+    if os.path.exists(os.path.join(rundir, "displacements", "completed")):
         logger.info("Displacement allready calculated, skipping.")
     else:
-        calculate_displacement_probabilities(rundir)
-    
-    calculate_release_probabilities(rundir)
+        calculate_displacement_probabilities(rundir, cumulative=False)
 
 def preprocess_shakemaps(rundir, shakemaps_filename, source_parameters_filename, cumulative=False):
     """ Method to read shakemap and: 
@@ -81,28 +74,34 @@ def preprocess_shakemaps(rundir, shakemaps_filename, source_parameters_filename,
 def calculate_displacement_probabilities(rundir, cumulative=False):
     """Displacement probabilities.
     """
-    thresholds = np.arange(1, 10, step=2.) # Displacement thresholds in cm.
-    dpa = DisplacementProbabilityAggregator(rundir, thresholds, magnitude=7)
+    threshold = 5.0 # Displacement thresholds in cm.
+    dpa = DisplacementProbabilityAggregator(rundir, magnitude=7)
     if cumulative:
-        dpa.compute_aggregated_probabilities()
+        dpa.compute_aggregated_probabilities(threshold=threshold)
     else:
-        dpa.compute_probabilities_by_sample(nr_of_pga_thresholds=100)
-
-def calculate_release_probabilities(rundir):
-    displacements_dir = os.path.join(rundir, "displacements")
-    with VolumeDatabaseHandler(rundir) as volumes_db:
-        for fname in os.listdir(displacements_dir):
-            if fname.startswith("sample_") and os.path.isdir(os.path.join(displacements_dir, fname)):
-                sample_nr = fname.split("_")[-1]
-                displacement_dir = os.path.join(displacements_dir, fname)
-                column_name = f"p_shake_{sample_nr}"
-                volumes_db.assign_probabilities_to_seed_triangles(
-                    displacement_threshold=5.,
-                    displacement_dir=displacement_dir,
-                    table_filename="exceedance_displacement.npz",
-                    column_name=column_name
-                )
-        #volumes_db.compute_release_probabilities()
+        dpa.compute_probabilities_by_sample(displacement_threshold=threshold, nr_of_pga_thresholds=100)
+    dpa.completed()
+    
+    # Write probabilities to database
+    if cumulative:
+        with VolumeDatabaseHandler(rundir) as volumes_db:
+            volumes_db.assign_probabilities_to_seed_triangles(
+                displacement_dir=os.path.join(rundir,"displacements","cumulative"),
+                table_filename="exceedance_displacement.npz",
+                column_name="p_shake_cum"
+    )
+    else:
+        displacements_dir = os.path.join(rundir, "displacements")
+        with VolumeDatabaseHandler(rundir) as volumes_db:
+            for fname in os.listdir(displacements_dir):
+                if fname.startswith("sample_") and os.path.isdir(os.path.join(displacements_dir, fname)):
+                    sample_nr = fname.split("_")[-1]
+                    column_name = f"p_shake_{sample_nr}"
+                    volumes_db.assign_probabilities_to_seed_triangles(
+                        displacement_dir=os.path.join(displacements_dir, fname),
+                        table_filename="exceedance_displacement.npz",
+                        column_name=column_name
+                    )
 
 if __name__ == "__main__":
     main()

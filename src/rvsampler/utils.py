@@ -27,9 +27,9 @@ def create_dir(dir_name, logger = None, clear=False):
     if clear and os.path.exists(dir_name):
         # Clear content
         if logger: 
-            logger.info(f"Directory exists: {dir_name}")
+            if logger is not None: logger.info(f"Directory exists: {dir_name}")
         try:
-            logger.info("Delete directory...")
+            if logger is not None: logger.info("Delete directory...")
             shutil.rmtree(dir_name)
         except OSError as e:
             sys.exit(f"Can't delete content - {dir_name}: {e}")
