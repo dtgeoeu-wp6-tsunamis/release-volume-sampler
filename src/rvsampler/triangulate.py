@@ -628,7 +628,6 @@ class Triangulation:
                 raster_index, threshold, probs = future.result()
                 thresholds[raster_index] = threshold
                 triangle_probs[:, raster_index] = probs
-                self.logger.info(f"Processing raster {raster_index} is complete.")
 
         np.savez(outfile, thresholds=thresholds, probs=triangle_probs) 
     

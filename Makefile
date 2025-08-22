@@ -34,9 +34,13 @@ clean-folder:
 	echo "Deleting $(RUNDIR)/$(FOLDER)"; \
 	rm -rf "$(RUNDIR)/$(FOLDER)"
 
-clean:
+clean-rundir:
 	@echo " Delete all output in $(RUNDIR)..."
 	rm -rf $(RUNDIR)
+
+clean-operational:
+	@echo " Cleaning up operational files in $(RUNDIR)..."
+	poetry run python src/clean_operational.py --rundir $(RUNDIR)
 
 # Help target
 help:
@@ -45,8 +49,9 @@ help:
 	@echo "  make volumes - Run preparational script - Creates volume database."
 	@echo "  make probabilities - Run operational script - Assigns probabilities to volumes."
 	@echo "  make plots TYPE=shakemaps - Plot a specific type (shakemaps, cumulative, quantiles, displacements)."
-	@echo "  make clean - Empty generated folder."
+	@echo "  make clean-rundir - Empty rundir."
 	@echo "  make clean-folder - Empty subfolder of the rundir. Usage: make clean-folder FOLDER=subfolder_name"
+	@echo "  make clean-operational - Clean up operational files and database entries in rundir."
 	@echo "  make help - Display this help message."
 
-.PHONY: clean help volumes probabilities clean-folder plots
+.PHONY: clean-rundir help volumes probabilities clean-folder plots clean-operational

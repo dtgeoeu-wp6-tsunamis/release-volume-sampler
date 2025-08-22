@@ -2,17 +2,11 @@
 import os
 import numpy as np
 import pandas as pd
-from scipy.spatial.distance import cdist
-import sys
-import json
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import MiniBatchKMeans
 
 import sqlite3
-
-from rvsampler.utils import create_dir
 from rvsampler.set_logg import setup_logger
-from rvsampler.database_handler import VolumeDatabaseHandler
 
 
 def main():
@@ -81,8 +75,7 @@ class ClusterAnalysis:
     def __init__(self, rundir, n_clusters, random_state, batch_size, 
                  columns_to_scale, feature_columns, weights):
         self.rundir = rundir
-        self.output_dir = os.path.join(rundir, 'volumes', 'cluster_analysis')
-        create_dir(self.output_dir)
+        self.output_dir = os.path.join(rundir, 'volumes') # Writes to the volumes directory.
         self.logger = setup_logger("cluster", self.output_dir)
         
         self.db_path = os.path.join(rundir, 'volumes', 'volumes.db')

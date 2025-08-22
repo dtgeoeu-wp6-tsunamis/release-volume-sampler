@@ -6,7 +6,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import convolve2d
 from matplotlib.colors import LogNorm
-from scipy.interpolate import interp1d
 import cartopy.crs as ccrs
 import sqlite3
 import csv
@@ -14,7 +13,6 @@ import ast
 
 from rvsampler.set_logg import setup_logger
 from rvsampler.utils import create_dir
-from rvsampler.triangulate import Triangulation
 
 # Map rasterio driver to file suffix.
 SUFFIX_MAP = {
@@ -368,64 +366,6 @@ class VolumeDatabaseHandler:
         self.conn.commit()
         self.logger.info("Assigned probabilities to all seed triangles.")
     
-    def compute_release_probabilities(self, column_name="p_shake", batch_size=1000):
-        
-        """
-        Compute probabilities of the initial state of each volume based on the release probability
-        of each seed triangle in the initial state.
-        
-        If the volume is assigned to a slopeunit the sample space is all initial states within the 
-        given slopeunit. If the volume is not assigned to a slopeunit (i.e. slopeunit=-1) the 
-        volume is considered an independent trial (We assume no interaction between volumes).
-        
-        Processes the database in batches for efficiency.
-        
-        Parameters:
-            column_name (str): Column name of the assigned variable.
-        """
-        # Add column if not present
-        if column_name not in VOLUMES_SCHEMA.keys():
-            try:
-                self.cursor.execute(f"ALTER TABLE volumes ADD COLUMN {column_name} REAL")
-                self.logger.info(f"Added '{column_name}' column to the table.")
-                self.conn.commit()
-            except Exception as e:
-                self.logger.warning(f"Could not add column '{column_name}': {e}")
-
-        # Load all triangle probabilities from seed_triangles table into a dict
-        self.cursor.execute("SELECT triangle_id, p_shake FROM seed_triangles")
-        triangle_probs = {row["triangle_id"]: row[column_name] for row in self.cursor.fetchall()}
-        seed_triangles_in_su = self.load_slopeunits_to_seedtriangles()
-        # Assign release probabilities to volumes.
-        offset = 0
-        while True:
-            query = f"SELECT id, seed_triangles, slopeunit FROM volumes LIMIT {batch_size} OFFSET {offset}"
-            df = pd.read_sql_query(query, self.conn)
-            if df.empty:
-                break
-
-            # Vectorized probability calculation
-            df['prob'] = df.apply(
-                lambda row: self.get_release_probability(
-                    json.loads(row['seed_triangles']) if isinstance(row['seed_triangles'], str) else row['seed_triangles'],
-                    seed_triangles_in_su[row['slopeunit']],
-                    row['slopeunit'],
-                    triangle_probs
-                ),
-                axis=1
-            )
-            updates = list(zip(df['prob'], df['id']))
-
-            if updates:
-                self.cursor.executemany(
-                    f"UPDATE volumes SET {column_name} = ? WHERE id = ?", updates
-                )
-                self.conn.commit()
-
-            offset += batch_size
-
-        self.logger.info(f"Finished assigning '{column_name}' to all volumes.")
-    
     def load_slopeunits_to_seedtriangles(self):
         """
         Build a dictionary mapping slopeunit -> list of seed triangle indices,
@@ -442,41 +382,6 @@ class VolumeDatabaseHandler:
                 slopeunits_to_seedtriangles[su] = []
             slopeunits_to_seedtriangles[su].append(tri)
         return slopeunits_to_seedtriangles
-
-    def get_release_probability(self, seed_triangles, seed_triangles_in_su, slope_unit, probabilities):
-        """
-        Calculates the probability of the initial state defined by the seed triangles within the 
-        given slopeunit. If slopeunits are not defined (slope_unit = -1) the event is considered 
-        as independent (non exclusive).
-
-        Args:
-            seed_triangles (list[int]): Indices of seed triangles (released in the initial state).
-            slope_unit (int): Slope unit identifier.
-            seed_triangles_in_su (list[int]): All seed triangles (none released and released)
-                in the slopeunit.
-            probabilities (dict or np.ndarray): Mapping from triangle index to P(displacement > delta).
-                                                If ndarray, index is triangle index.
-
-        Returns:
-            float: Probability of the initial state.
-        
-        """
-        if slope_unit == -1:
-            return float(np.prod([probabilities[tri] for tri in seed_triangles]))
-        else:
-            # Fetch all release triangles in the slopeunit
-            # Assume you have a method or mapping: self.slopeunit_to_triangles[slope_unit]
-            # which gives a list/array of triangle indices in the slopeunit.
-
-            # Prepare indicator vector: alpha[i] = 1 if triangle[i] is a seed triangle, else 0
-            seed_set = set(seed_triangles)
-            alpha = np.array([1 if tri in seed_set else 0 for tri in seed_triangles_in_su])
-
-            # Get probabilities for all triangles in the slopeunit
-            p = np.array([probabilities[tri] for tri in seed_triangles_in_su])
-            
-            # Compute probability: prod(p_i^alpha_i * (1-p_i)^(1-alpha_i))
-            return float(np.prod(p**alpha * (1 - p)**(1 - alpha)))
 
     def write_volumes_to_csv(self, max_rasters=100):
         #self.df.drop(columns=["released"]).to_csv(os.path.join(self.output_dir, "volumes.csv"),
@@ -617,20 +522,6 @@ class VolumeDatabaseHandler:
         with rasterio.open(volume_path, 'w', **profile) as dst:
             dst.write(volume_raster.astype(rasterio.float32), 1)
         self.logger.info(f"Wrote volume raster: {volume_path}")
-
-    def get_cluster_probability(self, cluster_id, probability_column="p_shake"):
-        """
-        Compute probability of the given clusters based on probability of volumes.
-        
-        parameters:
-            clusters (list): List of cluster IDs.
-            probability_column (str): Column name for the probability to use.
-        """
-        cluster_probabilities = {}
-        query = f""" SELECT * FROM volumes WHERE cluster = ?  """, (cluster_id,)
-        self.cursor.execute(query)
-        df_cluster = pd.read_sql_query(query, self.conn)
-        # TODO: Caclulate probability that 1 or more volumes in the cluster is released.
         
     def landslide_grid_extent(self, volume, upstream_dict, lon_tri, lat_tri, tri_mask):
         """ 
@@ -720,7 +611,25 @@ class VolumeDatabaseHandler:
             triangles = json.loads(row["seed_triangles"])
             seed_triangles_set.update(triangles)
         return seed_triangles_set
-            
+    
+    def drop_p_shake_columns(self):
+        """
+        Remove all columns starting with 'p_shake' from the seed_triangles table.
+        """
+        # Get all columns in the table
+        self.cursor.execute("PRAGMA table_info(seed_triangles)")
+        columns = [row[1] for row in self.cursor.fetchall()]
+        p_shake_cols = [col for col in columns if col.startswith("p_shake")]
+
+        for col in p_shake_cols:
+            try:
+                self.cursor.execute(f"ALTER TABLE seed_triangles DROP COLUMN {col}")
+                self.logger.info(f"Dropped column '{col}' from seed_triangles.")
+            except Exception as e:
+                self.logger.warning(f"Could not drop column '{col}': {e}")
+        self.conn.commit()    
+
+    
     def plot_distribution(self, seed_prob="p_fos_seed"):
         """Create figures to display the volume distribution.
         """

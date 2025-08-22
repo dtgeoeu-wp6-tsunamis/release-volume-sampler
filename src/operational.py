@@ -1,28 +1,20 @@
 import os
 import numpy as np
-import pandas as pd
 import rasterio
 import argparse
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
-from scipy.spatial.distance import cdist
-from scipy.interpolate import interp1d
 
 from rvsampler.displacements import DisplacementProbabilityAggregator
 from rvsampler.shakemaps_reader import ShakemapsReader
 from rvsampler.utils import create_dir
 from rvsampler.set_logg import setup_logger
 from rvsampler.database_handler import VolumeDatabaseHandler
-
-import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm, Normalize
-
+from rvsampler.aggregate import ProbabilityAggregator
 
 
 def main():
     """This script assigns release probabilities to the release volumes in the database.
     """
-    # Rundir tas inn som input
+    # Rundir as input
     parser = argparse.ArgumentParser(description="Release volume sampler")
     parser.add_argument('--rundir', required=True, help='Path to the run directory')
     parser.add_argument('--rootdir', required=True, help='Path to the rvsampler root directory')
@@ -30,7 +22,7 @@ def main():
     rundir = args.rundir
     rootdir = args.rootdir
     
-    logger = setup_logger("preparational", rundir)
+    logger = setup_logger("operational", rundir)
     shakemaps_params = {
         #"shakemaps_filename": os.path.join(rundir, "input/shakemaps/messina_1908/predicted_data_NN_Messina_1908.json"),
         "shakemaps_filename": os.path.join(rootdir, "input/shakemaps/PGA_data/H_Z_pda_data_log10_G.json"),
@@ -41,9 +33,13 @@ def main():
     else:
         preprocess_shakemaps(rundir, **shakemaps_params)
     if os.path.exists(os.path.join(rundir, "displacements", "completed")):
-        logger.info("Displacement allready calculated, skipping.")
+        logger.info("Displacement exceedance probabilities allready calculated, skipping.")
     else:
         calculate_displacement_probabilities(rundir, cumulative=False)
+    if os.path.exists(os.path.join(rundir, "aggregation", "completed")):
+        logger.info("Aggregation already done, skipping.")
+    else:
+        aggregate_cluster_release_probabilities(rundir)
 
 def preprocess_shakemaps(rundir, shakemaps_filename, source_parameters_filename, cumulative=False):
     """ Method to read shakemap and: 
@@ -55,22 +51,28 @@ def preprocess_shakemaps(rundir, shakemaps_filename, source_parameters_filename,
         shakemaps_filename=shakemaps_filename,
         source_parameters_filename=source_parameters_filename,
         rundir=rundir,
-        thresholds=np.linspace(-3,0,40), 
-        aggregate=False,
-        samples=None    #[0,3] - or specify a list of samples to read
     )
-    
-    # Interpolate over computational region and write to files
+
     with rasterio.open(os.path.join(rundir, "bathy_truncated.tif")) as src:
         bounds = src.bounds
         profile = src.profile.copy()
-    
-    shakemaps_reader.write_shakemaps_to_rasters(
-        profile=profile, 
-        bounds=bounds,
-        interpolation_method='linear', # “linear”, “nearest”, “slinear”, “cubic”, “quintic” and “pchip”
-    )
 
+    if cumulative:
+        shakemaps_reader.write_cumulative_distribution(
+            profile=profile, 
+            bounds=bounds,
+            interpolation_method='linear', # “linear”, “nearest”, “slinear”, “cubic”, “quintic” and “pchip”
+            thresholds=np.linspace(-3, 0, 40), # Thresholds for cumulative distribution
+        )
+    else:
+        shakemaps_reader.write_shakemaps_to_rasters(
+            profile=profile, 
+            bounds=bounds,
+            samples=None, # None (reads all samples) or specify a list of samples to read, e.g., [0,3]
+            interpolation_method='linear', # “linear”, “nearest”, “slinear”, “cubic”, “quintic” and “pchip”
+        )
+    shakemaps_reader.completed()
+    
 def calculate_displacement_probabilities(rundir, cumulative=False):
     """Displacement probabilities.
     """
@@ -102,6 +104,15 @@ def calculate_displacement_probabilities(rundir, cumulative=False):
                         table_filename="exceedance_displacement.npz",
                         column_name=column_name
                     )
+
+def aggregate_cluster_release_probabilities(rundir):
+    """Aggregate cluster release probabilities.
+    """
+    pag = ProbabilityAggregator(rundir)
+    pag.compute_cluster_release_probabilities()
+    pag.plot_cluster_probability_heatmap(save_fig=True)
+    pag.completed()
+
 
 if __name__ == "__main__":
     main()
