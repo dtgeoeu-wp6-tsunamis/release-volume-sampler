@@ -16,79 +16,75 @@ class ProbabilityAggregator:
         create_dir(self.output_dir, logger=None, clear=True)
         self.logger = setup_logger("probability_aggregator", self.output_dir)
 
-    def get_cluster_release_probability(self, cluster_id, probability_column, db_handler, condprob_column="condprob"):
+    def get_cluster_release_probability(self, cluster_id, p_shake_cols, db_handler, condprob_column="condprob"):
         """
         Compute the probability that at least one volume in the given cluster is released,
-        accounting for grouping by seed triangles and conditional probabilities.
-
-        Parameters:
-            cluster_id (int): The cluster ID to compute the probability for.
-            probability_column (str): The column name for the release probability to use.
-            db_handler (VolumeDatabaseHandler): The database handler to use for queries.
-            condprob_column (str): The column name for the conditional probability.
-
-        Returns:
-            float: Probability that at least one volume in the cluster is released.
+        for all p_shake_* columns at once.
+        Returns a numpy array of probabilities (one per p_shake column).
         """
+        # Fetch seed_triangles and condprob for this cluster
         query = f"SELECT seed_triangles, {condprob_column} FROM volumes WHERE cluster = ?"
         db_handler.cursor.execute(query, (cluster_id,))
         rows = db_handler.cursor.fetchall()
         if not rows:
             self.logger.warning(f"No volumes found for cluster {cluster_id}.")
-            return 0.0
-        
-        # Sum probabilities of all release volumes with same initial state.
+            return np.zeros(len(p_shake_cols))
+
         df = pd.DataFrame(rows, columns=["seed_triangles", condprob_column])
         df["seed_triangles_tuple"] = df["seed_triangles"].apply(
             lambda val: tuple(ast.literal_eval(val)) if isinstance(val, str) else tuple(val)
         )
         condprob_sum = df.groupby("seed_triangles_tuple")[condprob_column].sum().reset_index()
-        
-        # Fetch seed triangle release probabilities
+
+        # Collect all triangle_ids needed
         triangle_ids = set()
         for tup in condprob_sum["seed_triangles_tuple"]:
             triangle_ids.update(tup)
+        if not triangle_ids:
+            return np.zeros(len(p_shake_cols))
+
+        # Fetch all p_shake columns for these triangles in one query
         placeholders = ",".join("?" for _ in triangle_ids)
-        query = f"SELECT triangle_id, {probability_column} FROM seed_triangles WHERE triangle_id IN ({placeholders})"
+        col_str = ", ".join([f'"{col}"' for col in p_shake_cols])
+        query = f"SELECT triangle_id, {col_str} FROM seed_triangles WHERE triangle_id IN ({placeholders})"
         db_handler.cursor.execute(query, tuple(triangle_ids))
-        p_shake_map = dict(db_handler.cursor.fetchall())
+        shake_rows = db_handler.cursor.fetchall()
+        # Build a DataFrame: index=triangle_id, columns=p_shake_cols
+        shake_df = pd.DataFrame(shake_rows, columns=["triangle_id"] + p_shake_cols).set_index("triangle_id")
 
-        # Compute prob = condprob*p_shake for each distinct initial state.
-        p_row = condprob_sum[condprob_column] * condprob_sum["seed_triangles_tuple"].apply(
-            lambda tup: np.prod([p_shake_map.get(tri, 1.0) for tri in tup])
-        )
+        # For each seed_triangles_tuple, compute the product of p_shake values for all columns
+        # Result: shape (n_tuples, n_cols)
+        tuple_arr = np.zeros((len(condprob_sum), len(p_shake_cols)))
+        for i, tup in enumerate(condprob_sum["seed_triangles_tuple"]):
+            vals = shake_df.loc[list(tup)].values  # shape (len(tup), n_cols)
+            tuple_arr[i, :] = np.prod(vals, axis=0)
 
-        # Return probability at least one release occurs
-        return float(1 - np.prod(1 - p_row))
+        # Multiply by condprob_sum and compute 1 - prod(1 - p_row) for each column
+        p_row = condprob_sum[condprob_column].values[:, None] * tuple_arr  # shape (n_tuples, n_cols)
+        # For each column: 1 - prod(1 - p_row[:, col])
+        probs = 1 - np.prod(1 - p_row, axis=0)
+        return probs
 
     def compute_cluster_release_probabilities(self, p_shake_cols="p_shake_", condprob_column="condprob"):
         """
-        Compute cluster release probabilities for all clusters and all p_shake_* columns.
+        Compute cluster release probabilities for all clusters and all p_shake_* columns (vectorized).
         Returns a DataFrame with clusters as index and p_shake_* columns as columns.
-
-        p_shake_cols: String used as prefix for release probabilitiy columns derived from shakemaps.
-        condprob_column: String used as the column name for conditional release probabilities of volumes.
         """
-        
-        # Fetch all columns containing release porobabilities
         with VolumeDatabaseHandler(self.rundir) as db_handler:
             res = db_handler.cursor.execute("PRAGMA table_info(seed_triangles)")
             p_shake_cols = [col[1] for col in res.fetchall() if col[1].startswith('p_shake_')]
-        
+
             # Get all clusters
-            clusters = pd.read_sql_query("SELECT DISTINCT cluster FROM volumes", db_handler.conn)\
-                ['cluster'].sort_values().tolist()
-            self.logger.info("Computing cluster release probabilities for {} clusters and {} p_shake columns."\
-                .format(len(clusters), len(p_shake_cols)))
+            clusters = pd.read_sql_query("SELECT DISTINCT cluster FROM volumes", db_handler.conn)['cluster'].sort_values().tolist()
+            self.logger.info(f"Computing cluster release probabilities for {len(clusters)} clusters and {len(p_shake_cols)} p_shake columns.")
 
             # Prepare result DataFrame
             result = pd.DataFrame(index=clusters, columns=p_shake_cols, dtype=float)
             for cluster in clusters:
-                self.logger.info("Computing probabilities for cluster {}".format(cluster))
-                for pcol in p_shake_cols:
-                    prob = self.get_cluster_release_probability(cluster, pcol, db_handler, condprob_column=condprob_column)
-                    result.loc[cluster, pcol] = prob
-        
+                self.logger.info(f"Computing probabilities for cluster {cluster}")
+                probs = self.get_cluster_release_probability(cluster, p_shake_cols, db_handler, condprob_column=condprob_column)
+                result.loc[cluster, :] = probs
+
         # Sort columns numerically from p_shake_0 to p_shake_120
         def p_shake_key(col):
             try:
@@ -104,7 +100,7 @@ class ProbabilityAggregator:
                  probabilities=result.values, 
                  clusters=result.index,
                  scenarios=result.columns)
-        self.logger.info("Cluster release probabilities saved to {}.".format(self.output_dir)) 
+        self.logger.info(f"Cluster release probabilities saved to {self.output_dir}.")
     
     def plot_cluster_probability_heatmap(self, save_fig=False):
         # load cluster_release_probabilities

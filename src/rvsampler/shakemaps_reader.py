@@ -113,8 +113,14 @@ class ShakemapsReader:
         shake_interp = RegularGridInterpolator(points=grid_shake, values=np.flip(data.T,-1), method=interpolation_method) # Data need to be ij matrix format (See np.meshgrid)
         
         # Interpolate grid.
-        grid_int = np.meshgrid(np.linspace(bbox.left, bbox.right, num=n_cols), np.linspace(bbox.bottom, bbox.top, num=n_rows), indexing='ij')
-        shake_values = shake_interp(grid_int)
+        x = np.linspace(bbox.left, bbox.right, num=n_cols)
+        y = np.linspace(bbox.bottom, bbox.top, num=n_rows)
+        xx, yy = np.meshgrid(x, y, indexing='ij')
+        points = np.stack([xx.ravel(), yy.ravel()], axis=-1)
+        shake_values = shake_interp(points).reshape(xx.shape)
+        
+        #grid_int = np.meshgrid(np.linspace(bbox.left, bbox.right, num=n_cols), np.linspace(bbox.bottom, bbox.top, num=n_rows), indexing='ij')
+        #shake_values = shake_interp(grid_int)
         return(np.flip(shake_values,-1).T)
 
     def completed(self):

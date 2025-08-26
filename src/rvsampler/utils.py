@@ -36,7 +36,7 @@ def create_dir(dir_name, logger = None, clear=False):
     if not os.path.exists(dir_name):
         try:
             os.makedirs(dir_name)
-            if logger: logger.info(f"Created directory {dir_name}")
+            if logger: logger.debug(f"Created directory {dir_name}")
         except OSError as e:
             sys.exit(f"Can't create {dir_name}: {e}")
 

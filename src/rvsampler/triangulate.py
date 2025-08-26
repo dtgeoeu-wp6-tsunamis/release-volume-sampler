@@ -588,7 +588,7 @@ class Triangulation:
         """
         
         #triangulation_dir = os.path.join(self.rundir, "triangulation")
-        outfile = os.path.join(self.rundir, cumulative_dir, outfile_name)
+        outfile = os.path.join(cumulative_dir, outfile_name)
         
         self.logger.info(f"Loads exceedance probabilities from {cumulative_dir}")
         with open(os.path.join(cumulative_dir, "content.json"),'r') as f:
