@@ -11,7 +11,7 @@ import sqlite3
 import csv
 import ast
 
-from rvsampler.set_logg import setup_logger
+from rvsampler.set_logg import setup_logger, close_logger
 from rvsampler.utils import create_dir
 
 # Map rasterio driver to file suffix.
@@ -126,7 +126,7 @@ class VolumeDatabaseHandler:
             # Apply the affine transform to get x and y (lon/lat or projected coords)
             self.lon_tri, self.lat_tri = transform * (cols, rows)
         
-        self.logger = setup_logger("db_handler", self.output_dir)
+        self.logger = None 
         self.conn = None
         self.cursor = None
 
@@ -153,6 +153,7 @@ class VolumeDatabaseHandler:
 
 
     def __enter__(self):
+        self.logger = setup_logger("db_handler", self.output_dir)
         self.conn = sqlite3.connect(self.db_file)
         self.conn.row_factory = sqlite3.Row # Return rows as dicts.
         self.cursor = self.conn.cursor()
@@ -164,7 +165,8 @@ class VolumeDatabaseHandler:
             if self.conn:
                 self.conn.close()
                 self.logger.info("Database connection closed.")
-
+            if self.logger:
+                close_logger(self.logger)
 
     def insert_volume(self, volume_data):
         """

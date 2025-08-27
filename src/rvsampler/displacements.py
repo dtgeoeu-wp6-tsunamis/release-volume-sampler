@@ -8,7 +8,7 @@ from scipy import ndimage
 from concurrent.futures import ThreadPoolExecutor
 from rvsampler.utils import create_dir, read_tif, write_tif, write_content
 from rvsampler.triangulate import Triangulation 
-from rvsampler.set_logg import setup_logger
+from rvsampler.set_logg import setup_logger, close_logger
 
 """ Cacluation of displacements probabilities from yield acceleration and shakemaps.
 """
@@ -222,3 +222,4 @@ class DisplacementProbabilityAggregator:
         self.logger.info("Displacement probability processing completed.")
         with open(os.path.join(self.output_dir, "completed"), "w") as f:
             pass
+        close_logger(self.logger)

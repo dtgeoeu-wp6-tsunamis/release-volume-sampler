@@ -14,7 +14,7 @@ from scipy import ndimage
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from rvsampler.utils import create_dir, read_tif
-from rvsampler.set_logg import setup_logger
+from rvsampler.set_logg import setup_logger, close_logger
 
 def main():
     """ To ensure that modules are imports works, run the script as a module.
@@ -406,6 +406,7 @@ Area loss: {area_weight*area_loss.numpy():.10e}
         self.logger.info("Triangulation created, writing completion flag.")
         with open(os.path.join(self.output_dir, "completed"), "w") as f:
             pass
+        close_logger(self.logger)
 
 
 class Triangulation:
@@ -636,6 +637,7 @@ class Triangulation:
         self.logger.info("Triangulation created, writing completion flag.")
         with open(os.path.join(self.output_dir, "completed"), "w") as f:
             pass
+        close_logger(self.logger)
 
 if __name__ == "__main__":
     main()

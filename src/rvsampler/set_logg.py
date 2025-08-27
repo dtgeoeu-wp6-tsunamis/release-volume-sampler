@@ -42,3 +42,16 @@ def setup_logger(routine_name, log_folder):
         logger.addHandler(console_handler)
     
     return logger
+
+
+def close_logger(logger):
+    """
+    Close all handlers for the given logger.
+
+    Args:
+        logger: Logger object to close.
+    """
+    handlers = logger.handlers[:]
+    for handler in handlers:
+        handler.close()
+        logger.removeHandler(handler)

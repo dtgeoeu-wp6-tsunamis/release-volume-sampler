@@ -3,7 +3,7 @@ import os
 import json
 
 from rvsampler.utils import read_tif, write_tif, create_dir, cumulative
-from rvsampler.set_logg import setup_logger
+from rvsampler.set_logg import setup_logger, close_logger
 
 
 class SlopeAnalysis:
@@ -263,6 +263,7 @@ class SlopeAnalysis:
         self.logger.info("Slope analysis completed, writing completion flag.")
         with open(os.path.join(self.out_dir, "completed"), "w") as f:
             pass
+        close_logger(self.logger)
 
 class Node():
     leaf_nodes = []

@@ -5,7 +5,7 @@ from scipy.interpolate import RegularGridInterpolator
 import csv
 
 from rvsampler.utils import create_dir, write_tif, cumulative, write_content
-from rvsampler.set_logg import setup_logger
+from rvsampler.set_logg import setup_logger, close_logger
 
 class ShakemapsReader:
     """
@@ -124,6 +124,7 @@ class ShakemapsReader:
         return(np.flip(shake_values,-1).T)
 
     def completed(self):
-        self.logger.info("Shakemaps processing completed.")
+        self.logger.info("Shakemaps processing completed, writing completion flag.")
         with open(os.path.join(self.shakemaps_out_dir, "completed"), "w") as f:
             pass
+        close_logger(self.logger)

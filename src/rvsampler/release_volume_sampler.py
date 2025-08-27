@@ -5,7 +5,7 @@ import os
 from itertools import product
 
 from rvsampler.utils import create_dir
-from rvsampler.set_logg import setup_logger
+from rvsampler.set_logg import setup_logger,close_logger
 from rvsampler.database_handler import VolumeDatabaseHandler
 from rvsampler.triangulate import Triangulation
 
@@ -311,6 +311,7 @@ class RecursiveReleaseAnalysis:
         self.logger.info("Release analysis completed, writing completion flag.")
         with open(os.path.join(self.output_dir, "completed"), "w") as f:
             pass
+        close_logger(self.logger)
 
 def process_initial_state(initial_state, triangulation, sampler, seed_probability):
     volumes = []

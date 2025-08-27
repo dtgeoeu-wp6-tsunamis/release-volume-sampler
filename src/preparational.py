@@ -256,15 +256,13 @@ def cluster_release_volumes(rundir):
         },
     }
     # Initialize ClusterAnalysis object
-    cluster_analysis = ClusterAnalysis(**config)    
-    # Fit the clustering model
-    cluster_analysis.fit()
-    # Write cluster label database
-    cluster_analysis.write_to_database()
-    # Find representatives and write to database
-    cluster_analysis.find_representatives()
-    # Close the database connection
-    cluster_analysis.close()
+    with ClusterAnalysis(**config) as cluster_analysis:
+        # Fit the clustering model
+        cluster_analysis.fit()
+        # Write cluster label database
+        cluster_analysis.write_to_database()
+        # Find representatives and write to database
+        cluster_analysis.find_representatives()
 
 def write_volumes(rundir):
     """ Writes the release volumes to csv and rasters.

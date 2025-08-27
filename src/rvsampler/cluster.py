@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import MiniBatchKMeans
 
 import sqlite3
-from rvsampler.set_logg import setup_logger
+from rvsampler.set_logg import setup_logger, close_logger
 
 
 def main():
@@ -31,15 +31,13 @@ def main():
         },
     }
     # Initialize ClusterAnalysis object
-    cluster_analysis = ClusterAnalysis(**config)    
-    # Fit the model
-    cluster_analysis.fit()
-    # Write to database
-    cluster_analysis.write_to_database()
-    # Find representatives
-    cluster_analysis.find_representatives()
-    # Close the database connection
-    cluster_analysis.close()
+    with ClusterAnalysis(**config) as cluster_analysis:
+        # Fit the model
+        cluster_analysis.fit()
+        # Write to database
+        cluster_analysis.write_to_database()
+        # Find representatives
+        cluster_analysis.find_representatives()
 
 class ClusterAnalysis:
     """
@@ -76,23 +74,37 @@ class ClusterAnalysis:
                  columns_to_scale, feature_columns, weights):
         self.rundir = rundir
         self.output_dir = os.path.join(rundir, 'volumes') # Writes to the volumes directory.
-        self.logger = setup_logger("cluster", self.output_dir)
         
         self.db_path = os.path.join(rundir, 'volumes', 'volumes.db')
-        self.conn = sqlite3.connect(self.db_path)
         self.n_clusters = n_clusters
         self.random_state = random_state
         self.batch_size = batch_size
         self.feature_columns = feature_columns
         self.columns_to_scale = columns_to_scale
         self.weights = weights
-        
+
+        # These are created in __enter__
+        self.logger = None
+        self.conn = None
+
         # Pointers to MiniBatchKMeans and StandardScaler created during fitting
         self.mbk = None
         self.scaler = None
         
-        self.logger.info(f"Initialized ClusterAnalysis with config: {self.get_params_dict()}")
 
+    def __enter__(self):
+        self.logger = setup_logger("cluster", self.output_dir)
+        self.logger.info(f"Initialized ClusterAnalysis with config: {self.get_params_dict()}")
+        self.conn = sqlite3.connect(self.db_path)
+        self.logger.info(f"Database connection established.")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.conn:
+            self.conn.close()
+            self.logger.info("Database connection closed.")
+        if self.logger:
+            close_logger(self.logger)
 
     def fit(self):
         """ 
@@ -203,6 +215,3 @@ class ClusterAnalysis:
             "columns_to_scale": self.columns_to_scale,
             "weights": self.weights,
         }
-
-    def close(self):
-        self.conn.close()

@@ -6,7 +6,7 @@ import os
 
 from rvsampler.database_handler import VolumeDatabaseHandler
 from rvsampler.utils import create_dir
-from rvsampler.set_logg import setup_logger
+from rvsampler.set_logg import setup_logger, close_logger
 
 class ProbabilityAggregator:
     """ Class to aggregate probabilities for clustered release volumes. """
@@ -133,3 +133,4 @@ class ProbabilityAggregator:
         self.logger.info("Cluster release probabilities computation completed.")   
         with open(os.path.join(self.output_dir, "completed"), "w") as f:
             pass
+        close_logger(self.logger)
