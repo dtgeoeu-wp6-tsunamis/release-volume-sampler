@@ -17,8 +17,8 @@ class ShakemapsReader:
         self.shakemaps_filename = shakemaps_filename
         self.source_parameters_filename = source_parameters_filename
         self.shakemaps_out_dir = os.path.join(rundir, "shakemaps")
-        self.logger = setup_logger("shakemaps_reader", self.shakemaps_out_dir)
         create_dir(self.shakemaps_out_dir, clear=True)
+        self.logger = setup_logger("shakemaps_reader", self.shakemaps_out_dir)
         with open(self.shakemaps_filename, 'r') as f:
             self.shakemaps = json.load(f)
         self.compute_logpga()

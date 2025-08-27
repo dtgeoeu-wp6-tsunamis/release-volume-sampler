@@ -2,6 +2,11 @@ import os
 import shutil
 import argparse
 from rvsampler.database_handler import VolumeDatabaseHandler
+from stat import S_IWRITE
+
+def remove_readonly(func, path, excinfo):
+    os.chmod(path, S_IWRITE)
+    func(path)
 
 def cleanup_operational(rundir):
     folders = ["shakemaps", "displacements", "aggregation"]
@@ -9,7 +14,7 @@ def cleanup_operational(rundir):
         path = os.path.join(rundir, folder)
         if os.path.exists(path):
             print(f"Removing folder: {path}")
-            shutil.rmtree(path)
+            shutil.rmtree(path, onerror=remove_readonly)
         else:
             print(f"Folder not found (skipped): {path}")
 
