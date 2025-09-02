@@ -4,7 +4,7 @@
 # Default input, for other paths provide input when running the commands:
 # make volumes rootdir=c:/ROOTDIR
 ROOTDIR ?= /home/ebr/projects/release-volume-sampler
-REGION ?= messina_002
+REGION ?= messina_20250806_minimal
 RUNDIR ?= $(ROOTDIR)/generated/$(REGION)# Defined path in preparational.py
 
 
@@ -42,6 +42,10 @@ clean-operational:
 	@echo " Cleaning up operational files in $(RUNDIR)..."
 	poetry run python src/clean_operational.py --rundir $(RUNDIR)
 
+minimal-rundir:
+	@echo "Reducing $(RUNDIR) to minimal files for preparational.py..."
+	poetry run python src/make_minimal_rundir.py --rundir $(RUNDIR)
+
 # Help target
 help:
 	@echo "Makefile for Generation of Release Volumes"
@@ -54,4 +58,4 @@ help:
 	@echo "  make clean-operational - Clean up operational files and database entries in rundir."
 	@echo "  make help - Display this help message."
 
-.PHONY: clean-rundir help volumes probabilities clean-folder plots clean-operational
+.PHONY: clean-rundir help volumes probabilities clean-folder plots clean-operational minimal-rundir

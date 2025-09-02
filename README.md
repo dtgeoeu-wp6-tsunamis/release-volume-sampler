@@ -6,15 +6,14 @@ The preparational step creates a database of release volumes. This encompass the
 1. Slope Analysis: Calculation of factor of safety and yield accelleration in a probabilistic framework. 
 1. Triangulation: Creation of a triangular mesh used as a spatial discretization for the selection of release volumes. The mesh is fitted using TensorFlow.
 1. Volume Sampling: Recursive sampling proceedure for the generation of release volumes.
-1. Clustering of release volumes.
+1. Clustering: Release volumes are clustered based on similarity both in terms of size and location. Cluster representatives are written to rasters. 
 
 **Operational submodule**
 The operational submodule assigns probabilities to the release volumes based on a shakemap. This encompass:
 
 1. Calculation of cumulative distribution PGA (ensemble).
 1. Calculation of exceedance probabilities of the earthquake-induced slope displacements.
-1. Calculation of release probabilities.
-
+1. Calculation of release probabilities (Including aggregation of cluster probabilities).
 
 ## Input
 Example input files can be downloaded from... These include
